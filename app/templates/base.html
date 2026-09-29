@@ -20,46 +20,45 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <script>(function(){const t=localStorage.getItem('fmt-theme')||'system';const d=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light';document.documentElement.dataset.themePreference=t;if(localStorage.getItem('fmt-sidebar')==='collapsed')document.documentElement.classList.add('sidebar-precollapsed');})();</script>
 <title>{{ settings.get('title','FMT Operations Dashboard') }} — Site {{ settings.get('site','TBS') }}</title>
-<link rel="stylesheet" href="/static/app.css?v=2.8.13"><script>window.FMT_I18N={{ (js_i18n or {})|tojson }};window.FMT_LANG="{{lang or 'en'}}";</script><script defer src="/static/app.js?v=2.8.13"></script></head>
+<link rel="stylesheet" href="/static/app.css?v=3.0.0"><script defer src="/static/app.js?v=3.0.0"></script></head>
 <body><div class="app-shell"><div class="sidebar-overlay" id="sidebarOverlay"></div>
 <aside class="sidebar" id="sidebar">
-  <div class="brand brand-id"><div class="logo-wrap"><img src="/brand/logo" alt="BDX" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"><div class="logo-mark" style="display:none">BDX</div></div><div class="brand-copy"><strong>{{ settings.get('title','FMT Operations Dashboard') }}</strong><small>{{ settings.get('division','FMT') }} {{t('shell.division')}} <span>•</span> Site {{ settings.get('site','TBS') }}</small></div></div>
+  <div class="brand enterprise-brand"><div class="logo-wrap"><img src="/brand/logo" alt="BDX" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"><div class="logo-mark" style="display:none">BDX</div></div><div class="brand-copy"><strong>{{ settings.get('title','FMT Operations Dashboard') }}</strong><small>{{ settings.get('division','FMT') }} Division <span>•</span> Site {{ settings.get('site','TBS') }}</small></div></div>
   <div class="context-strip"><span>{{ settings.get('division','FMT') }}</span><span>TBS</span><span class="env-dot">{{ settings.get('environment','PRODUCTION') }}</span></div>
   <nav>
-    <a class="nav-link" href="/"><span class="nav-ico">{{icon('dashboard')}}</span><span class="nav-text">{{t('nav.dashboard')}}</span></a>
-    <div class="nav-group">{{t('nav.group.docops')}}</div>
-    <a class="nav-link" href="/attendance"><span class="nav-ico">{{icon('attendance')}}</span><span class="nav-text">{{t('nav.attendance')}}</span></a>
-    {% if can('attendance.upload') or can('create') %}<a class="nav-link" href="/attendance/upload"><span class="nav-ico">{{icon('upload')}}</span><span class="nav-text">{{t('nav.upload')}}</span></a>{% endif %}
-    {% if can('attendance.view') %}<a class="nav-link" href="/attendance/signing"><span class="nav-ico">{{icon('sign')}}</span><span class="nav-text">{{t('nav.signing')}}</span>{% if notifications.sign %}<b class="nav-count">{{notifications.sign}}</b>{% endif %}</a>{% endif %}
-    {% if can('signature.view') or can('attendance.sign') %}<a class="nav-link" href="/signatures"><span class="nav-ico">{{icon('sign')}}</span><span class="nav-text">{{t('nav.signatures')}}</span></a>{% endif %}
-    <div class="nav-group">{{t('nav.group.inventory')}}</div>
-    <a class="nav-link" href="/inventory/assets"><span class="nav-ico">{{icon('asset')}}</span><span class="nav-text">{{t('nav.assets')}}</span></a>
-    <a class="nav-link" href="/inventory/tools"><span class="nav-ico">{{icon('tools')}}</span><span class="nav-text">{{t('nav.tools')}}</span></a>
-    <a class="nav-link" href="/consumables"><span class="nav-ico">{{icon('consumable')}}</span><span class="nav-text">{{t('nav.consumables')}}</span>{% if notifications.low %}<b class="nav-count warn">{{notifications.low}}</b>{% endif %}</a>
-    <div class="nav-group">{{t('nav.group.change')}}</div>
-    <a class="nav-link" href="/tickets?type=Change"><span class="nav-ico">{{icon('change')}}</span><span class="nav-text">{{t('nav.change')}}</span></a>
-    <a class="nav-link" href="/tickets?type=Incident"><span class="nav-ico">{{icon('incident')}}</span><span class="nav-text">{{t('nav.incident')}}</span>{% if notifications.critical %}<b class="nav-count danger">{{notifications.critical}}</b>{% endif %}</a>
-    <a class="nav-link" href="/tickets?type=Problem"><span class="nav-ico">{{icon('problem')}}</span><span class="nav-text">{{t('nav.problem')}}</span></a>
-    <a class="nav-link" href="/reports"><span class="nav-ico">{{icon('report')}}</span><span class="nav-text">{{t('nav.reports')}}</span></a>
-    <div class="nav-group">{{t('nav.group.admin')}}</div>
-    {% if can('audit.view') or can('admin') %}<a class="nav-link" href="/activity"><span class="nav-ico">{{icon('audit')}}</span><span class="nav-text">{{t('nav.audit')}}</span></a>{% endif %}
-    {% if can('admin') %}<a class="nav-link" href="/users"><span class="nav-ico">{{icon('users')}}</span><span class="nav-text">{{t('nav.users')}}</span></a><a class="nav-link" href="/roles"><span class="nav-ico">{{icon('roles')}}</span><span class="nav-text">{{t('nav.roles')}}</span></a><a class="nav-link" href="/settings"><span class="nav-ico">{{icon('settings')}}</span><span class="nav-text">{{t('nav.settings')}}</span></a>{% endif %}
+    <a class="nav-link" href="/"><span class="nav-ico">{{icon('dashboard')}}</span><span class="nav-text">Dashboard</span></a>
+    <div class="nav-group">DOCUMENT OPERATIONS</div>
+    <a class="nav-link" href="/attendance"><span class="nav-ico">{{icon('attendance')}}</span><span class="nav-text">Attendance</span></a>
+    {% if can('attendance.upload') or can('create') %}<a class="nav-link" href="/attendance/upload"><span class="nav-ico">{{icon('upload')}}</span><span class="nav-text">Upload PDFs</span></a>{% endif %}
+    {% if can('attendance.view') %}<a class="nav-link" href="/attendance/signing"><span class="nav-ico">{{icon('sign')}}</span><span class="nav-text">Signing Workspace</span>{% if notifications.sign %}<b class="nav-count">{{notifications.sign}}</b>{% endif %}</a>{% endif %}
+    {% if can('signature.view') or can('attendance.sign') %}<a class="nav-link" href="/signatures"><span class="nav-ico">{{icon('sign')}}</span><span class="nav-text">Signatures</span></a>{% endif %}
+    <div class="nav-group">INVENTORY</div>
+    <a class="nav-link" href="/inventory/assets"><span class="nav-ico">{{icon('asset')}}</span><span class="nav-text">Asset FMT</span></a>
+    <a class="nav-link" href="/inventory/tools"><span class="nav-ico">{{icon('tools')}}</span><span class="nav-text">Tools Inventory</span></a>
+    <a class="nav-link" href="/consumables"><span class="nav-ico">{{icon('consumable')}}</span><span class="nav-text">Consumables</span>{% if notifications.low %}<b class="nav-count warn">{{notifications.low}}</b>{% endif %}</a>
+    <div class="nav-group">CHANGE MANAGEMENT</div>
+    <a class="nav-link" href="/tickets?type=Change"><span class="nav-ico">{{icon('change')}}</span><span class="nav-text">Change Ticket</span></a>
+    <a class="nav-link" href="/tickets?type=Incident"><span class="nav-ico">{{icon('incident')}}</span><span class="nav-text">Incident Ticket</span>{% if notifications.critical %}<b class="nav-count danger">{{notifications.critical}}</b>{% endif %}</a>
+    <a class="nav-link" href="/tickets?type=Problem"><span class="nav-ico">{{icon('problem')}}</span><span class="nav-text">Problem Ticket</span></a>
+    <a class="nav-link" href="/reports"><span class="nav-ico">{{icon('report')}}</span><span class="nav-text">Reports</span></a>
+    <div class="nav-group">ADMINISTRATION</div>
+    {% if can('audit.view') or can('admin') %}<a class="nav-link" href="/activity"><span class="nav-ico">{{icon('audit')}}</span><span class="nav-text">Audit Trail</span></a>{% endif %}
+    {% if can('admin') %}<a class="nav-link" href="/users"><span class="nav-ico">{{icon('users')}}</span><span class="nav-text">User Management</span></a><a class="nav-link" href="/roles"><span class="nav-ico">{{icon('roles')}}</span><span class="nav-text">Roles & Permissions</span></a><a class="nav-link" href="/settings"><span class="nav-ico">{{icon('settings')}}</span><span class="nav-text">System Settings</span></a>{% endif %}
   </nav>
-  <div class="sidebar-foot"><div class="sidebar-health"><i></i><span>{{t('shell.system_operational')}}</span></div><div class="powered">{{ settings.get('footer','Developed by Edwin Mohamad') }}</div></div>
+  <div class="sidebar-foot"><div class="sidebar-health"><i></i><span>System operational</span></div><div class="powered">{{ settings.get('footer','Powered by Edwin Mohamad') }}</div></div>
 </aside>
 <main class="main"><header class="topbar">
   <button class="icon-btn sidebar-toggle" id="sidebarToggle" type="button" aria-label="Toggle sidebar"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
-  <div class="topbar-context"><div><b>{{settings.get('division','FMT')}}</b><span>{{t('shell.facility_mgmt')}}</span></div><span class="context-divider"></span><div><b>Site {{settings.get('site','TBS')}}</b><span class="system-live"><i></i>{{t('shell.operational')}}</span></div></div>
+  <div class="topbar-context"><div><b>{{settings.get('division','FMT')}}</b><span>Facility Management</span></div><span class="context-divider"></span><div><b>Site {{settings.get('site','TBS')}}</b><span class="system-live"><i></i>Operational</span></div></div>
   <div class="topbar-spacer"></div>
-  <button class="search-pill" type="button" id="commandBtn"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg><span>{{t('shell.search_placeholder')}}</span><kbd>Ctrl K</kbd></button>
+  <button class="search-pill" type="button" id="commandBtn"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg><span>Search anything...</span><kbd>Ctrl K</kbd></button>
   <div class="topbar-time"><span id="liveClock">--:--:--</span><small>WIB</small></div>
-  <button class="notify-btn" title="{{t('shell.notifications')}}" aria-label="{{t('shell.notifications')}}"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>{% if notifications.sign+notifications.low+notifications.critical %}<i>{{notifications.sign+notifications.low+notifications.critical}}</i>{% endif %}</button>
-  <a class="theme-btn lang-btn" href="/lang/{{ 'id' if lang=='en' else 'en' }}" title="{{t('shell.lang')}}">{{ 'ID' if lang=='en' else 'EN' }}</a>
+  <button class="notify-btn" title="Attention required" aria-label="Notifications"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>{% if notifications.sign+notifications.low+notifications.critical %}<i>{{notifications.sign+notifications.low+notifications.critical}}</i>{% endif %}</button>
   <button class="theme-btn" id="themeToggle" type="button"><span id="themeIcon">◐</span><span id="themeLabel">System</span></button>
-  <div class="profile-menu-wrap"><button class="user-chip" id="profileMenuBtn" type="button">{% if user['photo_path'] %}<img class="avatar-img" src="/files/{{user['photo_path']}}" alt="">{% else %}<span class="avatar">{{user['full_name'][0]}}</span>{% endif %}<div><strong>{{user['full_name']}}</strong><small>{{vl(user['role'])}} • {{user['site'] or 'TBS'}}</small></div><svg class="chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg></button>
-    <div class="profile-menu" id="profileMenu" hidden><div class="profile-menu-head"><b>{{user['full_name']}}</b><span>{{user['position'] or vl(user['role'])}} • {{user['division'] or 'FMT'}} / {{user['site'] or 'TBS'}}</span></div><a href="/profile">{{t('shell.profile.myprofile')}}</a>{% if can('admin') %}<a href="/users">{{t('shell.profile.users')}}</a><a href="/settings">{{t('shell.profile.settings')}}</a>{% endif %}<form method="post" action="/logout"><button type="submit">{{t('shell.profile.signout')}}</button></form></div>
+  <div class="profile-menu-wrap"><button class="user-chip" id="profileMenuBtn" type="button">{% if user['photo_path'] %}<img class="avatar-img" src="/files/{{user['photo_path']}}" alt="">{% else %}<span class="avatar">{{user['full_name'][0]}}</span>{% endif %}<div><strong>{{user['full_name']}}</strong><small>{{user['role']}} • {{user['site'] or 'TBS'}}</small></div><svg class="chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg></button>
+    <div class="profile-menu" id="profileMenu" hidden><div class="profile-menu-head"><b>{{user['full_name']}}</b><span>{{user['position'] or user['role']}} • {{user['division'] or 'FMT'}} / {{user['site'] or 'TBS'}}</span></div><a href="/profile">My Profile & Security</a>{% if can('admin') %}<a href="/users">User Management</a><a href="/settings">System Settings</a>{% endif %}<form method="post" action="/logout"><button type="submit">Sign out</button></form></div>
   </div>
 </header>
 <section class="content">{% block content %}{% endblock %}</section></main></div>
-<div class="command-modal" id="commandModal" hidden><div class="command-box"><div class="command-search-row"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg><input id="commandSearch" placeholder="{{t('shell.cmd.placeholder')}}"><kbd>{{t('shell.esc')}}</kbd></div><div class="command-hints"><a href="/attendance/upload"><b>{{t('shell.cmd.quick_action')}}</b> {{t('shell.cmd.upload')}}<small>{{t('shell.cmd.upload_sub')}}</small></a><a href="/attendance/signing"><b>{{t('shell.cmd.quick_action')}}</b> {{t('shell.cmd.signing')}}<small>{{t('shell.cmd.signing_sub')}}</small></a><a href="/tickets"><b>{{t('shell.cmd.navigate')}}</b> {{t('shell.cmd.tickets')}}<small>{{t('shell.cmd.tickets_sub')}}</small></a><a href="/inventory/assets"><b>{{t('shell.cmd.navigate')}}</b> {{t('shell.cmd.assets')}}<small>{{t('shell.cmd.assets_sub')}}</small></a></div></div></div>
+<div class="command-modal" id="commandModal" hidden><div class="command-box"><div class="command-search-row"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg><input id="commandSearch" placeholder="Search asset, ticket, PDF, employee..."><kbd>ESC</kbd></div><div class="command-hints"><a href="/attendance/upload"><b>Quick action</b> Upload attendance PDFs<small>Document operations</small></a><a href="/attendance/signing"><b>Quick action</b> Open signing workspace<small>Bulk PDF signing</small></a><a href="/tickets"><b>Navigate</b> Search tickets<small>Change management</small></a><a href="/inventory/assets"><b>Navigate</b> Search assets<small>Inventory</small></a></div></div></div>
 <div id="toastHost" class="toast-host"></div></body></html>

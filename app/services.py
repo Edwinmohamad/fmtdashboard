@@ -230,66 +230,6 @@ def pdf_info(path: Path) -> dict:
         raise HTTPException(400,f'PDF could not be read: {exc}')
 
 
-def detect_signature_positions(path: Path, keywords: list[str]) -> list[dict]:
-    """Read-only helper for the signing workspace: scans every page of the PDF for the given
-    anchor keywords (tried in order, e.g. 'Menyetujui', 'Mengetahui Atasan Langsung') and, when
-    exactly one occurrence of a keyword is found on a page, proposes a signature box directly
-    below it -- sized using the page's own layout (the real gap to the next line of text below,
-    and to the next label on the same row, if any) rather than a fixed guess. Pages where a
-    keyword is missing, appears more than once (ambiguous -- e.g. a form with several signature
-    columns), or have no text layer at all (scanned attachments) are reported as needing manual
-    placement. This function never writes anything; the caller still saves each accepted page
-    through the normal placement endpoint.
-    Returns one dict per page: {page, status: 'found'|'ambiguous'|'not_found', keyword,
-    nx, ny, nw, nh} (the nx/ny/nw/nh normalized box is present only when status=='found')."""
-    results=[]
-    try:
-        doc=fitz.open(path)
-    except Exception:
-        return results
-    try:
-        if doc.needs_pass: return results
-        for i in range(doc.page_count):
-            page=doc[i]; pr=page.rect
-            result={'page':i+1,'status':'not_found','keyword':None}
-            matched=None; ambiguous=False
-            for kw in keywords:
-                kw=(kw or '').strip()
-                if not kw: continue
-                try: rects=page.search_for(kw)
-                except Exception: rects=[]
-                if len(rects)==1:
-                    matched=rects[0]; result['keyword']=kw; break
-                elif len(rects)>1:
-                    ambiguous=True
-            if matched is None:
-                result['status']='ambiguous' if ambiguous else 'not_found'
-                results.append(result); continue
-            words=page.get_text('words')
-            mx0,my0,mx1,my1=matched.x0,matched.y0,matched.x1,matched.y1
-            # Next line of text below the label, roughly in the same column -- marks where the blank signature area ends.
-            below=[w for w in words if w[1]>my1+0.5 and w[0]<mx0+300 and w[2]>mx0-30]
-            next_y=min((w[1] for w in below),default=min(pr.height,my1+45))
-            # Other text on the same row, to the right (e.g. a second column's label) -- caps the box width.
-            same_row_right=[w for w in words if w[1]<my1 and w[3]>my0 and w[0]>mx1+3]
-            max_x=min((w[0] for w in same_row_right),default=pr.width)-6
-            box_x0=mx0; box_y0=my1+2
-            box_y1=min(next_y-2,my1+45)
-            if box_y1-box_y0<12: box_y1=box_y0+20
-            box_x1=min(box_x0+160,max_x,pr.width-4)
-            if box_x1-box_x0<40: box_x1=min(box_x0+40,pr.width-4)
-            nx,ny=box_x0/pr.width,box_y0/pr.height
-            nw,nh=(box_x1-box_x0)/pr.width,(box_y1-box_y0)/pr.height
-            if nw<=0.01 or nh<=0.01 or nx<0 or ny<0 or nx+nw>1.0001 or ny+nh>1.0001:
-                result['status']='ambiguous'
-            else:
-                result.update({'status':'found','nx':round(nx,4),'ny':round(ny,4),'nw':round(nw,4),'nh':round(nh,4)})
-            results.append(result)
-    finally:
-        doc.close()
-    return results
-
-
 def render_pdf_page(path: Path, page_no: int, zoom: float=1.5, placements: list[dict]|None=None, signature_paths: dict[int,Path]|None=None) -> bytes:
     doc=fitz.open(path)
     try:

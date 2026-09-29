@@ -12,21 +12,9 @@ from .db import init_db, q, execute, now, audit, BASE, connect
 from .auth import bootstrap_admin, current_user, verify_password, create_session, delete_session, COOKIE, COOKIE_SECURE, SESSION_HOURS, can, hash_password
 from .services import (save_upload, save_image_upload, inventory_import_xlsx, preview_inventory_xlsx, export_inventory_xlsx,
     ALLOWED_IMAGE, ALLOWED_TICKET, TICKET_TRANSITIONS, ATTENDANCE_TRANSITIONS, allowed_attendance_transitions, allowed_ticket_transitions,
-    pdf_info, render_pdf_page, sign_pdf, sha256_file, validate_image_file, detect_signature_positions)
-from .i18n import get_lang, t as _t, vl as _vl, js_dict as _js_dict, SUPPORTED as LANG_SUPPORTED, COOKIE as LANG_COOKIE
-from .notify import notify_event, send_telegram, EVENT_TEMPLATES
+    pdf_info, render_pdf_page, sign_pdf, sha256_file, validate_image_file)
 
 app = FastAPI(title="FMT Operations Dashboard — Site TBS", docs_url=None, redoc_url=None)
-
-PAGE_SIZE = 25
-
-def paginate_query(sql: str, params: list, page: int = 1, per_page: int = PAGE_SIZE):
-    """Wrap a SELECT (no LIMIT/OFFSET) with pagination. Returns (rows, meta)."""
-    total = q(f"SELECT COUNT(*) c FROM ({sql})", params, one=True)['c']
-    pages = max(1, (total + per_page - 1) // per_page)
-    page = max(1, min(page, pages))
-    rows = q(sql + " LIMIT ? OFFSET ?", list(params) + [per_page, (page - 1) * per_page])
-    return rows, {'page': page, 'pages': pages, 'total': total, 'per_page': per_page}
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -76,9 +64,7 @@ def page(request: Request, template: str, **ctx):
       'low': q("SELECT COUNT(*) c FROM consumables WHERE current_stock<=minimum_stock",one=True)['c'],
       'critical': q("SELECT COUNT(*) c FROM tickets WHERE ticket_type='Incident' AND severity='Critical' AND status NOT IN ('Closed','Cancelled')",one=True)['c'],
     }
-    lang = get_lang(request)
-    base={"request":request,"user":user,"settings":settings,"notifications":notif,"can":lambda a:can(user,a),
-          "lang":lang,"t":lambda k,**kw:_t(lang,k,**kw),"vl":lambda v:_vl(lang,v),"js_i18n":_js_dict(lang)}
+    base={"request":request,"user":user,"settings":settings,"notifications":notif,"can":lambda a:can(user,a)}
     base.update(ctx)
     return templates.TemplateResponse(template, base)
 
@@ -97,40 +83,19 @@ def remove_uploaded_file(rel_path: str|None):
     except Exception:
         pass
 
-
-def doc_names_map(ids: list[int]) -> dict:
-    """id -> original filename for a list of attendance ids. Missing/deleted ids are simply
-    absent from the returned dict rather than raising."""
-    if not ids: return {}
-    placeholders=','.join('?'*len(ids))
-    rows=q(f"SELECT a.id,v.original_name FROM attendance a JOIN attendance_versions v ON v.attendance_id=a.id AND v.version=a.current_version WHERE a.id IN ({placeholders})",ids)
-    return {r['id']:r['original_name'] for r in rows}
-
-
-def doc_names(ids: list[int]) -> list[str]:
-    """Original filenames for a list of attendance ids, in the same order, for surfacing
-    which specific documents need attention (e.g. a mismatched-layout list) instead of a
-    bare count. Missing/deleted ids are skipped rather than raising."""
-    names=doc_names_map(ids)
-    return [names[i] for i in ids if i in names]
-
 def wants_json(request: Request) -> bool:
     return request.headers.get('X-Requested-With','').lower() in {'xmlhttprequest','fetch'} or 'application/json' in request.headers.get('accept','')
 
-def _lang_ctx(request: Request) -> dict:
-    lang = get_lang(request)
-    return {"lang":lang,"t":lambda k,**kw:_t(lang,k,**kw),"vl":lambda v:_vl(lang,v)}
-
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request":request,"error":None, **_lang_ctx(request)})
+    return templates.TemplateResponse("login.html", {"request":request,"error":None})
 
 @app.post("/login")
 def login(request: Request, username: str=Form(...), password: str=Form(...)):
     u=q("SELECT * FROM users WHERE username=? AND active=1",(username,),one=True)
     if not u or not verify_password(password,u['password_hash']):
         if u: execute("UPDATE users SET failed_logins=failed_logins+1 WHERE id=?",(u['id'],))
-        return templates.TemplateResponse("login.html", {"request":request,"error":_t(get_lang(request),'login.error'), **_lang_ctx(request)}, status_code=401)
+        return templates.TemplateResponse("login.html", {"request":request,"error":"Invalid username or password"}, status_code=401)
     token=create_session(u['id']); execute("UPDATE users SET last_login_at=?,failed_logins=0 WHERE id=?",(now(),u['id'])); audit(u['id'],'Login','Authentication',u['username'])
     r=RedirectResponse("/",303); r.set_cookie(COOKIE,token,httponly=True,samesite='lax',secure=COOKIE_SECURE,max_age=SESSION_HOURS*3600,path='/')
     return r
@@ -138,13 +103,6 @@ def login(request: Request, username: str=Form(...), password: str=Form(...)):
 @app.post("/logout")
 def logout(request: Request):
     delete_session(request.cookies.get(COOKIE)); r=RedirectResponse("/login",303); r.delete_cookie(COOKIE); return r
-
-@app.get("/lang/{code}")
-def set_lang(request: Request, code: str):
-    ref = request.headers.get('referer') or '/'
-    r = RedirectResponse(ref, 303)
-    r.set_cookie(LANG_COOKIE, code if code in LANG_SUPPORTED else 'en', max_age=365*24*3600, path='/', httponly=False, samesite='lax')
-    return r
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
@@ -178,29 +136,16 @@ def dashboard(request: Request):
     for d in range(6,-1,-1):
         row=q("SELECT COUNT(*) c FROM attendance WHERE date(signed_at)=date('now','localtime',?)",(f'-{d} day',),one=True)
         trend.append(row['c'])
-    # Team activity: who has been doing the Upload/Sign work in the last 7 days (read-only, no new tables).
-    team_activity=q("""SELECT u.full_name,COUNT(*) c FROM audit_logs a JOIN users u ON u.id=a.user_id
-        WHERE a.action IN ('Upload','Sign PDF') AND a.created_at>=datetime('now','-7 day')
-        GROUP BY a.user_id ORDER BY c DESC LIMIT 5""")
-    # Documents sitting in the signing pipeline for more than 3 days without progress.
-    waiting_long=q("""SELECT id,employee_name,period,status,updated_at,
-        CAST(julianday('now')-julianday(updated_at) AS INTEGER) days_waiting
-        FROM attendance WHERE status IN ('Uploaded','Checking','Ready to Sign') AND updated_at<datetime('now','-3 day')
-        ORDER BY updated_at ASC LIMIT 5""")
-    # Open ticket breakdown by priority.
-    ticket_priority={r['priority']:r['c'] for r in q("""SELECT priority,COUNT(*) c FROM tickets
-        WHERE status NOT IN ('Closed','Cancelled','Resolved') GROUP BY priority""")}
-    return page(request,'dashboard.html',att=att,inv=inv,tic=tic,recent=recent,attention=attention,critical=critical,overdue=overdue,ready=ready,signed=signed,final=final,health=health,trend=trend,team_activity=team_activity,waiting_long=waiting_long,ticket_priority=ticket_priority)
+    return page(request,'dashboard.html',att=att,inv=inv,tic=tic,recent=recent,attention=attention,critical=critical,overdue=overdue,ready=ready,signed=signed,final=final,health=health,trend=trend)
 
 # ---------------- Attendance ----------------
 @app.get("/attendance", response_class=HTMLResponse)
-def attendance_list(request: Request, status: str|None=None, search: str="", pg: int=1):
+def attendance_list(request: Request, status: str|None=None, search: str=""):
     sql="SELECT a.*,u.full_name creator FROM attendance a LEFT JOIN users u ON u.id=a.created_by WHERE 1=1"; p=[]
     if status: sql+=" AND a.status=?"; p.append(status)
     if search: sql+=" AND (a.employee_name LIKE ? OR a.nik LIKE ? OR a.period LIKE ? OR a.location LIKE ?)"; p += [f"%{search}%"]*4
     sql+=" ORDER BY a.updated_at DESC"
-    rows,pgmeta=paginate_query(sql,p,pg)
-    return page(request,"attendance_list.html",rows=rows,status=status,search=search,pgmeta=pgmeta)
+    return page(request,"attendance_list.html",rows=q(sql,p),status=status,search=search)
 
 @app.get("/attendance/upload", response_class=HTMLResponse)
 def attendance_upload_page(request: Request):
@@ -230,8 +175,6 @@ def attendance_upload(request: Request, period:str=Form(...), division:str=Form(
                 con.execute("INSERT INTO attendance_versions(attendance_id,version,file_path,original_name,notes,status,uploaded_by,uploaded_at,checksum) VALUES(?,?,?,?,?,'Uploaded',?,?,?)",(aid,1,rel,orig,'Original Upload',u['id'],ts,checksum)); created.append((aid,orig))
             con.commit()
         for aid,orig in created: audit(u['id'],'Upload','Attendance',str(aid),None,orig)
-        if created:
-            notify_event('ready_to_sign',count=len(created),period=period,division=division or 'FMT',location=location or 'TBS')
     except Exception:
         # If database creation did not complete, remove staged files that are not referenced.
         for rel,_,_,_ in staged:
@@ -293,54 +236,6 @@ def attendance_signed_preview(request:Request,aid:int,page_no:int):
         tmp.unlink(missing_ok=True)
     return Response(content=data,media_type='image/png',headers={'Cache-Control':'no-store'})
 
-def _save_placement_row(aid:int,sid:int,page_no:int,vals:dict,uid:int,placement_id:int|None=None,new_instance:bool=False)->tuple[int,bool,bool]:
-    """Writes one placement row and returns (its id, whether it's confirmed, whether it's locked).
-    `confirmed` gates signing (see signing_sign) and defaults to true for the ordinary single-
-    placement flow so nothing changes for that case. `locked` is a separate, purely human-driven flag
-    -- it starts false for every placement, including a brand-new confirmed one, and only ever becomes
-    true through an explicit /api/signing/placement/confirm call (the confirm checkbox). Dragging or
-    resizing a box never sets it, so a plain reposition-and-autosave never locks the box against
-    itself -- confirmed defaulting to true is only about sign-eligibility, not about freezing position.
-    A page can hold more than one placement for the same signature (e.g. the same signer stamped in
-    two different approval boxes), so this is no longer a plain upsert keyed by
-    (attendance_id,signature_id,page):
-    - placement_id given: updates that exact row (must belong to aid) -- used whenever the caller
-      already knows precisely which instance it's repositioning, which matters once a signature has
-      more than one placement on the same page (otherwise an update-by-signature+page would be
-      ambiguous about which of several instances to touch). Refuses to move a row that is locked --
-      uncheck it first. Repositioning never changes confirmed or locked -- only
-      /api/signing/placement/confirm does that.
-    - new_instance=True (and no placement_id): always inserts a fresh row, even if this exact
-      signature+page combination already has one or more placements -- this is how an extra instance
-      of an already-placed signature gets created. Starts UNconfirmed and unlocked: an extra/duplicate
-      instance is exactly the case a human should look at before it's trusted for signing (see
-      signing_sign).
-    - neither given: reproduces the original single-instance-per-signature-per-page behavior, for
-      every caller that never needed to know about multiple instances (broadcast/apply-to-selected,
-      apply-template, auto-detect, the per-page toggle grid) -- reuses the first existing row for
-      (aid,sid,page) if one exists, else creates one at the column defaults (confirmed, unlocked).
-    """
-    ts=now()
-    if placement_id:
-        row=q('SELECT id,confirmed,locked FROM attendance_signature_placements WHERE id=? AND attendance_id=?',(placement_id,aid),one=True)
-        if not row: raise HTTPException(404,'Signature placement not found')
-        if row['locked']: raise HTTPException(400,'This signature placement is locked -- uncheck it before moving it')
-        execute("UPDATE attendance_signature_placements SET signature_id=?,page=?,nx=?,ny=?,nw=?,nh=?,updated_at=? WHERE id=?",
-                (sid,page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],ts,placement_id))
-        return placement_id,bool(row['confirmed']),bool(row['locked'])
-    if not new_instance:
-        existing=q('SELECT id,confirmed,locked FROM attendance_signature_placements WHERE attendance_id=? AND signature_id=? AND page=? ORDER BY id ASC LIMIT 1',(aid,sid,page_no),one=True)
-        if existing:
-            execute("UPDATE attendance_signature_placements SET nx=?,ny=?,nw=?,nh=?,created_by=?,updated_at=? WHERE id=?",
-                    (vals['nx'],vals['ny'],vals['nw'],vals['nh'],uid,ts,existing['id']))
-            return existing['id'],bool(existing['confirmed']),bool(existing['locked'])
-        new_id=execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (aid,sid,page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],uid,ts))
-        return new_id,True,False
-    new_id=execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,confirmed,locked,created_by,updated_at) VALUES(?,?,?,?,?,?,?,0,0,?,?)",
-            (aid,sid,page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],uid,ts))
-    return new_id,False,False
-
 @app.post('/api/signing/placement')
 def signing_placement(request:Request,payload:dict=Body(...)):
     u=require_action(request,'attendance.sign')
@@ -355,25 +250,12 @@ def signing_placement(request:Request,payload:dict=Body(...)):
     ainfo=pdf_info(BASE/av['file_path'])
     if page_no<1 or page_no>ainfo['page_count']: raise HTTPException(400,'Selected signature page does not exist')
     src_page=ainfo['pages'][page_no-1]; srcw=src_page['width']; srch=src_page['height']
-    placement_id_in=payload.get('placement_id')
-    placement_id,confirmed,locked=_save_placement_row(aid,sid,page_no,vals,u['id'],placement_id=int(placement_id_in) if placement_id_in else None,new_instance=bool(payload.get('new_instance')))
+    execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,created_by=excluded.created_by,updated_at=excluded.updated_at",
+            (aid,sid,page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now()))
     if payload.get('remember'):
         execute("INSERT INTO signature_position_templates(signature_id,page_count,page_width,page_height,page,nx,ny,nw,nh,label,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'Saved position',?,?) ON CONFLICT(signature_id,page_count,page_width,page_height,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
                 (sid,ainfo['page_count'],round(srcw,2),round(srch,2),page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now()))
-    # Apply only when the destination page itself has the same displayed dimensions. A page can
-    # hold more than one instance of the SAME signature (the same signer stamped in two different
-    # spots), so broadcast targets are matched by ORDINAL rather than blindly reusing whichever
-    # instance happens to be found first: this source placement's position among every instance of
-    # this signature on this source page (1st, 2nd, ...) is matched to that same ordinal position
-    # among the target document's own instances, updating it if one already exists at that ordinal
-    # or adding a new one otherwise. Without this, broadcasting a second instance of the same
-    # signature (e.g. dragging the top one, then the bottom one, to the same batch of documents)
-    # silently overwrote the first instance's row on every target instead of creating a second one
-    # there too -- on the target document the two ended up "tertimpa", collapsed into a single
-    # placement sitting at whichever position was broadcast most recently.
-    source_siblings=[r['id'] for r in q('SELECT id FROM attendance_signature_placements WHERE attendance_id=? AND signature_id=? AND page=? ORDER BY id ASC',(aid,sid,page_no))]
-    try: ordinal=source_siblings.index(placement_id)
-    except ValueError: ordinal=0
+    # Apply only when the destination page itself has the same displayed dimensions.
     applied=[aid]; mismatched=[]
     for x in payload.get('apply_ids') or []:
         x=int(x)
@@ -384,43 +266,10 @@ def signing_placement(request:Request,payload:dict=Body(...)):
         try: binfo=pdf_info(BASE/bv['file_path'])
         except Exception: mismatched.append(x); continue
         if binfo['page_count']==ainfo['page_count'] and page_no<=binfo['page_count'] and abs(binfo['pages'][page_no-1]['width']-srcw)<1 and abs(binfo['pages'][page_no-1]['height']-srch)<1:
-            target_siblings=[r['id'] for r in q('SELECT id FROM attendance_signature_placements WHERE attendance_id=? AND signature_id=? AND page=? ORDER BY id ASC',(x,sid,page_no))]
-            try:
-                if ordinal<len(target_siblings):
-                    _save_placement_row(x,sid,page_no,vals,u['id'],placement_id=target_siblings[ordinal])
-                elif target_siblings:
-                    # Target already has some instance(s) of this signature on this page, but fewer
-                    # than this ordinal -- add a new one instead of colliding with an existing
-                    # lower-ordinal instance that belongs to a different source placement.
-                    _save_placement_row(x,sid,page_no,vals,u['id'],new_instance=True)
-                else:
-                    _save_placement_row(x,sid,page_no,vals,u['id'])
-                applied.append(x)
-            except HTTPException:
-                # Most likely the matched target instance is locked -- leave it untouched rather
-                # than aborting the whole broadcast for every other selected document.
-                mismatched.append(x)
+            execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
+                    (x,sid,page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now())); applied.append(x)
         else: mismatched.append(x)
-    mismatched_names=doc_names(mismatched)
-    return {'ok':True,'placement_id':placement_id,'confirmed':confirmed,'locked':locked,'applied':applied,'mismatched':mismatched,'mismatched_names':mismatched_names}
-
-@app.post('/api/signing/placement/confirm')
-def signing_placement_confirm(request:Request,payload:dict=Body(...)):
-    """Toggles the confirm checkbox on one specific placement instance -- the only thing in the app
-    that sets `locked` (freezing its position against further dragging) and, together with it,
-    `confirmed` (the sign-time eligibility flag -- see signing_sign, which refuses to sign a document
-    that still has any unconfirmed placement). The two always move together here: checking the box
-    means "this position is reviewed and OK, don't touch it again," so it locks AND confirms in one
-    step; unchecking reverses both, freeing it to be dragged again but also pulling it back out of
-    signing until it's reviewed and checked again. Plain dragging/resizing never calls this endpoint
-    and never changes either flag -- only this explicit, human-initiated action does."""
-    u=require_action(request,'attendance.sign')
-    aid=int(payload.get('attendance_id')); placement_id=int(payload.get('placement_id'))
-    row=q('SELECT id FROM attendance_signature_placements WHERE id=? AND attendance_id=?',(placement_id,aid),one=True)
-    if not row: raise HTTPException(404,'Signature placement not found')
-    flag=1 if payload.get('confirmed') else 0
-    execute("UPDATE attendance_signature_placements SET confirmed=?,locked=?,updated_at=? WHERE id=?",(flag,flag,now(),placement_id))
-    return {'ok':True,'placement_id':placement_id,'confirmed':bool(flag),'locked':bool(flag)}
+    return {'ok':True,'applied':applied,'mismatched':mismatched}
 
 @app.post('/api/signing/apply-template')
 def apply_signature_template(request:Request,payload:dict=Body(...)):
@@ -439,178 +288,14 @@ def apply_signature_template(request:Request,payload:dict=Body(...)):
             if 1<=pn<=info['page_count'] and abs(info['pages'][pn-1]['width']-cand['page_width'])<1 and abs(info['pages'][pn-1]['height']-cand['page_height'])<1:
                 t=cand; break
         if not t: mismatched.append(aid); continue
-        vals={'nx':t['nx'],'ny':t['ny'],'nw':t['nw'],'nh':t['nh']}
-        _save_placement_row(aid,sid,t['page'],vals,u['id']); applied.append(aid); applied_placements.append({'attendance_id':aid,'signature_id':sid,'page':t['page'],'nx':t['nx'],'ny':t['ny'],'nw':t['nw'],'nh':t['nh']})
-    mismatched_names=doc_names(mismatched)
-    return {'ok':True,'applied':applied,'mismatched':mismatched,'mismatched_names':mismatched_names,'placements':applied_placements}
-
-@app.post('/api/signing/suggest-position')
-def signing_suggest_position(request:Request,payload:dict=Body(...)):
-    """Read-only helper for the signing workspace: given a document and a signature, return
-    a previously saved position template that matches this document's page layout (same
-    matching logic as apply-template), WITHOUT writing anything. Lets the UI pre-fill the
-    draggable signature box automatically so a repeat layout doesn't require re-dragging;
-    the user still has to click Save Placement to actually persist it."""
-    require_action(request,'attendance.sign')
-    aid=int(payload.get('attendance_id')); sid=int(payload.get('signature_id'))
-    v=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
-    if not v: raise HTTPException(404,'Document not found')
-    try: info=pdf_info(BASE/v['file_path'])
-    except Exception: return {'ok':True,'found':False}
-    candidates=q("SELECT * FROM signature_position_templates WHERE signature_id=? AND page_count=? ORDER BY updated_at DESC",(sid,info['page_count']))
-    for cand in candidates:
-        pn=int(cand['page'])
-        if 1<=pn<=info['page_count'] and abs(info['pages'][pn-1]['width']-cand['page_width'])<1 and abs(info['pages'][pn-1]['height']-cand['page_height'])<1:
-            return {'ok':True,'found':True,'page':pn,'nx':cand['nx'],'ny':cand['ny'],'nw':cand['nw'],'nh':cand['nh']}
-    return {'ok':True,'found':False}
-
-@app.post('/api/signing/same-layout')
-def signing_same_layout(request:Request,payload:dict=Body(...)):
-    """Read-only helper for the signing workspace: given a reference document/page and a
-    list of candidate document ids, return which candidates share the exact same page
-    layout (page count + width/height within 1px), using the identical tolerance already
-    used when applying a placement to multiple selected PDFs. Does not modify any data."""
-    require_action(request,'attendance.sign')
-    aid=int(payload.get('attendance_id')); page_no=int(payload.get('page',1))
-    candidate_ids=[int(x) for x in (payload.get('candidate_ids') or [])]
-    av=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
-    if not av: raise HTTPException(404,'Document not found')
-    ainfo=pdf_info(BASE/av['file_path'])
-    if page_no<1 or page_no>ainfo['page_count']: raise HTTPException(400,'Selected page does not exist')
-    srcw=ainfo['pages'][page_no-1]['width']; srch=ainfo['pages'][page_no-1]['height']
-    matches=[]
-    for x in candidate_ids:
-        if x==aid: matches.append(x); continue
-        bv=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(x,),one=True)
-        if not bv: continue
-        try: binfo=pdf_info(BASE/bv['file_path'])
-        except Exception: continue
-        if binfo['page_count']==ainfo['page_count'] and page_no<=binfo['page_count'] and abs(binfo['pages'][page_no-1]['width']-srcw)<1 and abs(binfo['pages'][page_no-1]['height']-srch)<1:
-            matches.append(x)
-    return {'ok':True,'matches':matches}
-
-@app.post('/api/signing/detect-positions')
-def signing_detect_positions(request:Request,payload:dict=Body(...)):
-    """Read-only helper for the signing workspace: scans every page of a document for the
-    given anchor keywords (e.g. 'Menyetujui', 'Mengetahui Atasan Langsung', configurable from
-    the UI) and proposes a signature position directly below each confident match. Pages where
-    the keyword is missing, appears more than once, or the page has no text layer at all (a
-    scanned attachment) come back flagged for manual placement -- nothing is guessed for those.
-    This endpoint does not save anything; the caller still saves each accepted page through the
-    normal /api/signing/placement endpoint."""
-    require_action(request,'attendance.sign')
-    aid=int(payload.get('attendance_id'))
-    keywords=[str(k) for k in (payload.get('keywords') or []) if str(k).strip()][:10]
-    if not keywords: raise HTTPException(400,'At least one keyword is required')
-    v=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
-    if not v: raise HTTPException(404,'Document not found')
-    try: pages=detect_signature_positions(BASE/v['file_path'],keywords)
-    except Exception: pages=[]
-    return {'ok':True,'pages':pages}
-
-@app.post('/api/signing/placement/remove')
-def signing_placement_remove(request:Request,payload:dict=Body(...)):
-    """Deletes saved signature placement(s) from a document, so a page that was placed manually,
-    via auto-detect, or via apply-to-selected can be individually un-picked before signing. Does not
-    touch the source PDF or any other page.
-    Pass placement_id to delete exactly one specific instance -- the precise way to remove one of
-    several placements of the same signature on the same page. Without placement_id, falls back to
-    the legacy signature_id+page addressing and deletes every placement matching that pair (there is
-    normally only one; if a page happens to hold more than one instance of that signature, all of
-    them are removed, since the caller had no way to name a specific one)."""
-    require_action(request,'attendance.sign')
-    aid=int(payload.get('attendance_id'))
-    a=q('SELECT id FROM attendance WHERE id=?',(aid,),one=True)
-    if not a: raise HTTPException(404,'Document not found')
-    placement_id_in=payload.get('placement_id')
-    if placement_id_in:
-        row=q('SELECT id FROM attendance_signature_placements WHERE id=? AND attendance_id=?',(int(placement_id_in),aid),one=True)
-        if row: execute('DELETE FROM attendance_signature_placements WHERE id=?',(row['id'],))
-        return {'ok':True,'removed':bool(row)}
-    sid=int(payload.get('signature_id')); page_no=int(payload.get('page',0))
-    rows=q('SELECT id FROM attendance_signature_placements WHERE attendance_id=? AND signature_id=? AND page=?',(aid,sid,page_no))
-    for r in rows: execute('DELETE FROM attendance_signature_placements WHERE id=?',(r['id'],))
-    return {'ok':True,'removed':bool(rows)}
-
-@app.post('/api/signing/prune-pages')
-def signing_prune_pages(request:Request,payload:dict=Body(...)):
-    """Keeps only the given page numbers signed for a document: deletes every saved placement
-    on that document whose page is NOT in the provided list. Lets a batch that only needs, say,
-    3 of a 5-page PDF signed be pruned down in one action instead of removing pages one at a
-    time. Pages not currently placed are simply ignored (nothing to remove); at least one valid
-    page number is required so this can't silently wipe every placement by an empty submit."""
-    require_action(request,'attendance.sign')
-    aid=int(payload.get('attendance_id'))
-    a=q('SELECT page_count FROM attendance WHERE id=?',(aid,),one=True)
-    if not a: raise HTTPException(404,'Document not found')
-    pc=int(a['page_count'] or 1)
-    raw_pages=payload.get('pages') or []
-    pages=sorted({int(p) for p in raw_pages if isinstance(p,(int,float)) or (isinstance(p,str) and p.strip().lstrip('-').isdigit())})
-    invalid=[p for p in pages if p<1 or p>pc]
-    if invalid: raise HTTPException(400,f'Page(s) {", ".join(str(p) for p in invalid)} do not exist in this document (1-{pc})')
-    if not pages: raise HTTPException(400,'Enter at least one page number to keep')
-    existing=[dict(r) for r in q('SELECT page FROM attendance_signature_placements WHERE attendance_id=?',(aid,))]
-    existing_pages=sorted({int(r['page']) for r in existing})
-    to_remove=[p for p in existing_pages if p not in pages]
-    if to_remove:
-        placeholders=','.join('?'*len(to_remove))
-        execute(f'DELETE FROM attendance_signature_placements WHERE attendance_id=? AND page IN ({placeholders})',(aid,*to_remove))
-    remaining=[p for p in existing_pages if p in pages]
-    return {'ok':True,'kept':pages,'removed_pages':to_remove,'remaining_pages':remaining}
-
-@app.post('/api/signing/apply-page-range')
-def signing_apply_page_range(request:Request,payload:dict=Body(...)):
-    """Copies EVERY placement currently on one page of a document (source_page) onto a set of
-    OTHER pages of the same document (target_pages), each at its own already-saved position.
-    Fixes a real gap in the per-signature page grid above this control: that grid only ever
-    adds/removes whichever ONE signature is currently selected in the dropdown, so a page holding
-    two different signatures (e.g. "Menyetujui" + "Mengetahui Atasan Langsung") only ever got one
-    of them carried across a page range -- the other silently stayed behind on the source page.
-    This endpoint instead looks at every placement actually on source_page and replicates each one.
-    Purely additive: an existing placement is left completely untouched (never overwritten, resized,
-    or removed) -- nothing is ever removed by this action, unlike prune-pages above.
-    A target page is only ever skipped for one specific source placement when that EXACT
-    signature+position combination already sits there -- not merely because the signature appears
-    somewhere on that page. This matters because a page can hold more than one instance of the SAME
-    signature (e.g. the same person signing two separate sections stacked on one page, one placement
-    near the top and another near the bottom): keying "already has this signature" by signature_id
-    alone would treat the second instance as a duplicate of the first the moment the first one was
-    copied, silently dropping it from every target page instead of carrying both positions across."""
-    u=require_action(request,'attendance.sign')
-    aid=int(payload.get('attendance_id'))
-    a=q('SELECT page_count FROM attendance WHERE id=?',(aid,),one=True)
-    if not a: raise HTTPException(404,'Document not found')
-    pc=int(a['page_count'] or 1)
-    source_page=int(payload.get('source_page',0))
-    if source_page<1 or source_page>pc: raise HTTPException(400,f'Source page does not exist in this document (1-{pc})')
-    raw_targets=payload.get('target_pages') or []
-    targets=sorted({int(p) for p in raw_targets if isinstance(p,(int,float)) or (isinstance(p,str) and p.strip().lstrip('-').isdigit())})
-    targets=[p for p in targets if p!=source_page]
-    invalid=[p for p in targets if p<1 or p>pc]
-    if invalid: raise HTTPException(400,f'Page(s) {", ".join(str(p) for p in invalid)} do not exist in this document (1-{pc})')
-    if not targets: raise HTTPException(400,'Enter at least one target page other than the source page')
-    source_rows=[dict(r) for r in q('SELECT * FROM attendance_signature_placements WHERE attendance_id=? AND page=?',(aid,source_page))]
-    if not source_rows: raise HTTPException(400,'The source page has no signature placements to copy')
-    def poskey(sid,pg,nx,ny,nw,nh): return (int(sid),int(pg),round(float(nx),4),round(float(ny),4),round(float(nw),4),round(float(nh),4))
-    existing_keys={poskey(r['signature_id'],r['page'],r['nx'],r['ny'],r['nw'],r['nh']) for r in q('SELECT signature_id,page,nx,ny,nw,nh FROM attendance_signature_placements WHERE attendance_id=?',(aid,))}
-    ts=now(); copied=[]; skipped=0
-    for p in targets:
-        for row in source_rows:
-            sid=int(row['signature_id'])
-            key=poskey(sid,p,row['nx'],row['ny'],row['nw'],row['nh'])
-            if key in existing_keys:
-                skipped+=1; continue
-            new_id=execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                    (aid,sid,p,row['nx'],row['ny'],row['nw'],row['nh'],u['id'],ts))
-            existing_keys.add(key)
-            copied.append({'id':new_id,'signature_id':sid,'page':p,'nx':row['nx'],'ny':row['ny'],'nw':row['nw'],'nh':row['nh'],'confirmed':1,'locked':0})
-    return {'ok':True,'source_page':source_page,'target_pages':targets,'signatures_on_source':len(source_rows),'copied':copied,'skipped':skipped}
+        execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
+                (aid,sid,t['page'],t['nx'],t['ny'],t['nw'],t['nh'],u['id'],now())); applied.append(aid); applied_placements.append({'attendance_id':aid,'signature_id':sid,'page':t['page'],'nx':t['nx'],'ny':t['ny'],'nw':t['nw'],'nh':t['nh']})
+    return {'ok':True,'applied':applied,'mismatched':mismatched,'placements':applied_placements}
 
 @app.post('/api/signing/sign')
 def signing_sign(request:Request,payload:dict=Body(...)):
     u=require_action(request,'attendance.sign_bulk'); ids=[int(x) for x in payload.get('attendance_ids') or []]
     if not ids: raise HTTPException(400,'Select at least one PDF')
-    name_by_id=doc_names_map(ids)
     results=[]
     for aid in ids:
         try:
@@ -620,8 +305,6 @@ def signing_sign(request:Request,payload:dict=Body(...)):
             v=q('SELECT * FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
             pls=[dict(r) for r in q('SELECT * FROM attendance_signature_placements WHERE attendance_id=? ORDER BY page,id',(aid,))]
             if not pls: raise HTTPException(400,'Signature position is not configured')
-            unconfirmed=[p for p in pls if not p['confirmed']]
-            if unconfirmed: raise HTTPException(400,f"{len(unconfirmed)} signature placement(s) are not yet confirmed -- check them in the workspace before signing this document")
             sigpaths={r['id']:BASE/r['file_path'] for r in q("SELECT * FROM signatures WHERE id IN (SELECT signature_id FROM attendance_signature_placements WHERE attendance_id=?)",(aid,))}
             out_rel=f"uploads/attendance/signed/{aid}-{secrets.token_hex(6)}.pdf"; out=BASE/out_rel
             verify=sign_pdf(BASE/v['file_path'],out,pls,sigpaths)
@@ -632,10 +315,10 @@ def signing_sign(request:Request,payload:dict=Body(...)):
             for pl in pls:
                 execute("INSERT INTO attendance_sign_events(attendance_id,version,signature_id,page,nx,ny,nw,nh,signed_by,signed_at,checksum) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(aid,ver,pl['signature_id'],pl['page'],pl['nx'],pl['ny'],pl['nw'],pl['nh'],u['id'],ts,verify['checksum']))
             execute("DELETE FROM attendance_signature_placements WHERE attendance_id=?",(aid,))
-            audit(u['id'],'Sign PDF','Attendance',str(aid),None,verify['checksum']); results.append({'id':aid,'name':name_by_id.get(aid),'ok':True,'checksum':verify['checksum']})
+            audit(u['id'],'Sign PDF','Attendance',str(aid),None,verify['checksum']); results.append({'id':aid,'ok':True,'checksum':verify['checksum']})
         except Exception as exc:
             detail=exc.detail if isinstance(exc,HTTPException) else str(exc)
-            results.append({'id':aid,'name':name_by_id.get(aid),'ok':False,'error':detail})
+            results.append({'id':aid,'ok':False,'error':detail})
     ok=sum(1 for r in results if r['ok'])
     return {'ok':ok==len(results),'signed':ok,'failed':len(results)-ok,'results':results}
 
@@ -650,14 +333,12 @@ def attendance_finalize(request:Request,aid:int):
 
 @app.get("/attendance/{aid}", response_class=HTMLResponse)
 def attendance_detail(request: Request, aid:int):
-    u=current_user(request)
-    if not u: return RedirectResponse("/login", 303)
     a=q("SELECT a.*,cr.full_name creator,rv.full_name reviewer,ap.full_name approver FROM attendance a LEFT JOIN users cr ON cr.id=a.created_by LEFT JOIN users rv ON rv.id=a.reviewer_id LEFT JOIN users ap ON ap.id=a.approver_id WHERE a.id=?",(aid,),one=True)
     if not a: raise HTTPException(404)
     versions=q("SELECT v.*,u.full_name uploader FROM attendance_versions v LEFT JOIN users u ON u.id=v.uploaded_by WHERE attendance_id=? ORDER BY version DESC",(aid,))
     findings=q("SELECT f.*,u.full_name creator FROM attendance_findings f LEFT JOIN users u ON u.id=f.created_by WHERE attendance_id=? ORDER BY resolved,page,id",(aid,))
     critical=q("SELECT COUNT(*) c FROM attendance_findings WHERE attendance_id=? AND severity='Critical' AND resolved=0",(aid,),one=True)['c']
-    return page(request,"attendance_detail.html",a=a,versions=versions,findings=findings,critical=critical,transitions=allowed_attendance_transitions(u, a['status']))
+    return page(request,"attendance_detail.html",a=a,versions=versions,findings=findings,critical=critical,transitions=allowed_attendance_transitions(current_user(request), a['status']))
 
 @app.post("/attendance/{aid}/finding")
 def add_finding(request:Request, aid:int, page_no:int=Form(...), category:str=Form(...), severity:str=Form(...), description:str=Form(...), comment:str=Form('')):
@@ -710,17 +391,17 @@ INV = {
  'tools': dict(id='tool_id',name='tool_name',title='Tools Inventory',photo_table='tool_photos',photo_fk='tool_id',folder='tools'),
 }
 @app.get("/inventory/{kind}", response_class=HTMLResponse)
-def inventory_list(request:Request, kind:str, search:str='', pg:int=1):
+def inventory_list(request:Request, kind:str, search:str=''):
     if kind not in INV: raise HTTPException(404)
     m=INV[kind]; sql=f"SELECT * FROM {kind} WHERE 1=1"; p=[]
     if search: sql += f" AND ({m['id']} LIKE ? OR {m['name']} LIKE ? OR category LIKE ? OR brand LIKE ? OR serial_number LIKE ? OR location LIKE ? OR pic LIKE ? OR notes LIKE ?)"; p += [f"%{search}%"]*8
     sql += " ORDER BY id DESC"
-    rows,pgmeta=paginate_query(sql,p,pg)
+    rows=q(sql,p)
     # attach main photo
     out=[]
     for r in rows:
         d=dict(r); ph=q(f"SELECT file_path FROM {m['photo_table']} WHERE {m['photo_fk']}=? ORDER BY is_main DESC,id DESC LIMIT 1",(r['id'],),one=True); d['photo']=ph['file_path'] if ph else None; out.append(d)
-    return page(request,"inventory_list.html",kind=kind,m=m,rows=out,search=search,pgmeta=pgmeta)
+    return page(request,"inventory_list.html",kind=kind,m=m,rows=out,search=search)
 
 @app.post("/inventory/{kind}/save")
 def inventory_save(request:Request, kind:str, ident:str=Form(...), name:str=Form(...), category:str=Form(''), brand:str=Form(''), serial_number:str=Form(''), location:str=Form(''), pic:str=Form(''), condition:str=Form('Good'), status:str=Form('Active'), notes:str=Form('')):
@@ -780,13 +461,12 @@ def inventory_export(request:Request, kind:str):
 
 # ---------------- Consumables ----------------
 @app.get("/consumables", response_class=HTMLResponse)
-def consumables(request:Request, search:str='', low:int=0, pg:int=1):
+def consumables(request:Request, search:str='', low:int=0):
     sql="SELECT * FROM consumables WHERE 1=1"; p=[]
     if search: sql += " AND (item_id LIKE ? OR item_name LIKE ? OR category LIKE ? OR location LIKE ?)"; p += [f"%{search}%"]*4
     if low: sql += " AND current_stock<=minimum_stock"
     sql += " ORDER BY (current_stock<=minimum_stock) DESC,id DESC"
-    rows,pgmeta=paginate_query(sql,p,pg)
-    return page(request,"consumables.html",rows=rows,search=search,low=low,pgmeta=pgmeta)
+    return page(request,"consumables.html",rows=q(sql,p),search=search,low=low)
 
 @app.post("/consumables/save")
 def consumable_save(request:Request, item_id:str=Form(...), item_name:str=Form(...), category:str=Form(''), unit:str=Form(''), location:str=Form(''), current_stock:float=Form(0), minimum_stock:float=Form(0), notes:str=Form('')):
@@ -815,11 +495,7 @@ def stock_tx(request:Request,cid:int,transaction_type:str=Form(...),quantity:flo
         else: raise HTTPException(400,'Invalid stock transaction')
         con.execute("UPDATE consumables SET current_stock=?,updated_at=? WHERE id=?",(after,ts,cid))
         con.execute("INSERT INTO stock_transactions(consumable_id,transaction_type,quantity,before_stock,after_stock,notes,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)",(cid,transaction_type,qty,before,after,notes,u['id'],ts))
-    audit(u['id'],transaction_type,'Consumables',c['item_id'],str(before),str(after))
-    minimum=float(c['minimum_stock'])
-    if after<=minimum and before>minimum:
-        notify_event('low_stock',item_name=c['item_name'],item_id=c['item_id'],current_stock=after,unit=c['unit'] or '',minimum_stock=minimum)
-    return RedirectResponse('/consumables',303)
+    audit(u['id'],transaction_type,'Consumables',c['item_id'],str(before),str(after)); return RedirectResponse('/consumables',303)
 
 @app.post("/consumables/{cid}/photo")
 def consumable_photo(request:Request,cid:int,photo:UploadFile=File(...)):
@@ -882,14 +558,13 @@ def next_ticket_id(ticket_type:str):
     prefix={'Change':'CHG','Incident':'INC','Problem':'PRB'}[ticket_type]; year=datetime.now().year; row=q("SELECT ticket_id FROM tickets WHERE ticket_id LIKE ? ORDER BY id DESC LIMIT 1",(f"{prefix}-{year}-%",),one=True); n=int(row['ticket_id'].split('-')[-1])+1 if row else 1; return f"{prefix}-{year}-{n:04d}"
 
 @app.get("/tickets", response_class=HTMLResponse)
-def tickets(request:Request,type:str|None=None,status:str|None=None,severity:str|None=None,search:str='',pg:int=1):
+def tickets(request:Request,type:str|None=None,status:str|None=None,severity:str|None=None,search:str=''):
     sql="SELECT * FROM tickets WHERE 1=1"; p=[]
     for col,val in [('ticket_type',type),('status',status),('severity',severity)]:
         if val: sql+=f" AND {col}=?"; p.append(val)
     if search: sql += " AND (ticket_id LIKE ? OR title LIKE ? OR site LIKE ? OR location LIKE ? OR assigned_to LIKE ?)"; p += [f"%{search}%"]*5
     sql += " ORDER BY updated_at DESC"
-    rows,pgmeta=paginate_query(sql,p,pg)
-    return page(request,"tickets.html",rows=rows,type=type,status=status,severity=severity,search=search,pgmeta=pgmeta)
+    return page(request,"tickets.html",rows=q(sql,p),type=type,status=status,severity=severity,search=search)
 
 @app.post("/tickets/create")
 def ticket_create(request:Request,ticket_type:str=Form(...),title:str=Form(...),category:str=Form(''),site:str=Form(''),location:str=Form(''),requested_by:str=Form(''),assigned_to:str=Form(''),priority:str=Form('Medium'),severity:str=Form(''),risk:str=Form(''),impact:str=Form(''),planned_start:str=Form(''),planned_end:str=Form(''),implementation_plan:str=Form(''),rollback_plan:str=Form(''),root_cause:str=Form(''),action_taken:str=Form(''),temporary_solution:str=Form(''),permanent_solution:str=Form(''),corrective_action:str=Form(''),preventive_action:str=Form(''),related_ticket:str=Form('')):
@@ -908,19 +583,14 @@ def ticket_create(request:Request,ticket_type:str=Form(...),title:str=Form(...),
         except sqlite3.IntegrityError:
             continue
     if rid is None: raise HTTPException(409,'Could not allocate a unique Ticket ID. Please try again')
-    execute("INSERT INTO ticket_activity(ticket_id,action,note,actor_id,created_at) VALUES(?,?,?,?,?)",(rid,'Ticket Created','',u['id'],ts)); audit(u['id'],'Create',f'{ticket_type} Ticket',tid,None,title)
-    if ticket_type=='Incident' and severity=='Critical':
-        notify_event('critical_incident',ticket_id=tid,title=title,site=site or '-')
-    return RedirectResponse(f'/tickets/{rid}',303)
+    execute("INSERT INTO ticket_activity(ticket_id,action,note,actor_id,created_at) VALUES(?,?,?,?,?)",(rid,'Ticket Created','',u['id'],ts)); audit(u['id'],'Create',f'{ticket_type} Ticket',tid,None,title); return RedirectResponse(f'/tickets/{rid}',303)
 
 @app.get("/tickets/{rid}", response_class=HTMLResponse)
 def ticket_detail(request:Request,rid:int):
-    u=current_user(request)
-    if not u: return RedirectResponse("/login", 303)
     t=q("SELECT t.*,u.full_name creator FROM tickets t LEFT JOIN users u ON u.id=t.created_by WHERE t.id=?",(rid,),one=True)
     if not t: raise HTTPException(404)
     acts=q("SELECT a.*,u.full_name actor FROM ticket_activity a LEFT JOIN users u ON u.id=a.actor_id WHERE ticket_id=? ORDER BY a.id DESC",(rid,)); atts=q("SELECT a.*,u.full_name uploader FROM ticket_attachments a LEFT JOIN users u ON u.id=a.uploaded_by WHERE ticket_id=? ORDER BY a.id DESC",(rid,))
-    return page(request,"ticket_detail.html",ticket=t,acts=acts,atts=atts,transitions=allowed_ticket_transitions(u, t['status']))
+    return page(request,"ticket_detail.html",t=t,acts=acts,atts=atts,transitions=allowed_ticket_transitions(current_user(request), t['status']))
 
 @app.post("/tickets/{rid}/status")
 def ticket_status(request:Request,rid:int,status:str=Form(...),note:str=Form('')):
@@ -931,10 +601,7 @@ def ticket_status(request:Request,rid:int,status:str=Form(...),note:str=Form('')
     if status not in allowed_ticket_transitions(u, t['status']): raise HTTPException(403,'This role cannot perform that workflow transition')
     if status not in TICKET_TRANSITIONS.get(t['status'],set()): raise HTTPException(400,'Invalid workflow transition')
     if status in ('Rejected','Revision Required','Cancelled') and not note.strip(): raise HTTPException(400,'A note is required for this status')
-    ts=now(); execute("UPDATE tickets SET status=?,updated_at=? WHERE id=?",(status,ts,rid)); execute("INSERT INTO ticket_activity(ticket_id,action,note,actor_id,created_at) VALUES(?,?,?,?,?)",(rid,status,note,u['id'],ts)); audit(u['id'],'Status Change',f"{t['ticket_type']} Ticket",t['ticket_id'],t['status'],status)
-    if status=='Waiting Approval':
-        notify_event('approval_waiting',ticket_id=t['ticket_id'],title=t['title'])
-    return RedirectResponse(f'/tickets/{rid}',303)
+    ts=now(); execute("UPDATE tickets SET status=?,updated_at=? WHERE id=?",(status,ts,rid)); execute("INSERT INTO ticket_activity(ticket_id,action,note,actor_id,created_at) VALUES(?,?,?,?,?)",(rid,status,note,u['id'],ts)); audit(u['id'],'Status Change',f"{t['ticket_type']} Ticket",t['ticket_id'],t['status'],status); return RedirectResponse(f'/tickets/{rid}',303)
 
 @app.post("/tickets/{rid}/attachment")
 def ticket_attachment(request:Request,rid:int,description:str=Form(''),attachment:UploadFile=File(...)):
@@ -961,8 +628,7 @@ def ticket_delete(request:Request,rid:int):
     return RedirectResponse(f"/tickets?type={t['ticket_type']}&deleted=1",303)
 
 @app.get("/reports", response_class=HTMLResponse)
-def reports(request:Request, date_from:str='', date_to:str=''):
-    import datetime as _dt
+def reports(request:Request):
     stats={
       'attendance_total':q("SELECT COUNT(*) c FROM attendance",one=True)['c'],
       'attendance_approved':q("SELECT COUNT(*) c FROM attendance WHERE status='Approved'",one=True)['c'],
@@ -973,39 +639,11 @@ def reports(request:Request, date_from:str='', date_to:str=''):
       'open_tickets':q("SELECT COUNT(*) c FROM tickets WHERE status NOT IN ('Closed','Cancelled')",one=True)['c'],
       'closed_tickets':q("SELECT COUNT(*) c FROM tickets WHERE status='Closed'",one=True)['c'],
     }
-    today=_dt.date.today()
-    try: d_to=_dt.date.fromisoformat(date_to) if date_to else today
-    except ValueError: d_to=today
-    try: d_from=_dt.date.fromisoformat(date_from) if date_from else (d_to-_dt.timedelta(days=29))
-    except ValueError: d_from=d_to-_dt.timedelta(days=29)
-    if d_from>d_to: d_from,d_to=d_to,d_from
-    span=(d_to-d_from).days+1
-    span=min(span,180)
-    rows=q("SELECT substr(signed_at,1,10) d, COUNT(*) c FROM attendance WHERE signed_at IS NOT NULL AND substr(signed_at,1,10)>=? AND substr(signed_at,1,10)<=? GROUP BY d",(d_from.isoformat(),d_to.isoformat()))
-    by_day={r['d']:r['c'] for r in rows}
-    trend=[]
-    for i in range(span):
-        d=(d_from+_dt.timedelta(days=i)).isoformat()
-        trend.append({'date':d,'count':by_day.get(d,0)})
-    by_site=q("""
-      SELECT site, SUM(signed) signed, SUM(tickets) tickets FROM (
-        SELECT COALESCE(location,'-') site, COUNT(*) signed, 0 tickets FROM attendance WHERE signed_at IS NOT NULL AND substr(signed_at,1,10)>=? AND substr(signed_at,1,10)<=? GROUP BY location
-        UNION ALL
-        SELECT COALESCE(site,'-') site, 0 signed, COUNT(*) tickets FROM tickets WHERE substr(created_at,1,10)>=? AND substr(created_at,1,10)<=? GROUP BY site
-      ) GROUP BY site ORDER BY (signed+tickets) DESC
-    """,(d_from.isoformat(),d_to.isoformat(),d_from.isoformat(),d_to.isoformat()))
-    return page(request,'reports.html',stats=stats,trend=trend,by_site=by_site,date_from=d_from.isoformat(),date_to=d_to.isoformat())
+    return page(request,'reports.html',stats=stats)
 
 @app.get("/users", response_class=HTMLResponse)
-def users_page(request:Request, search:str='', role:str|None=None, status:str|None=None):
-    require_action(request,'admin')
-    sql="SELECT id,username,full_name,role,active,email,position,division,site,photo_path,last_login_at,created_at FROM users WHERE 1=1"; p=[]
-    if search: sql+=" AND (full_name LIKE ? OR username LIKE ? OR email LIKE ? OR position LIKE ?)"; p += [f"%{search}%"]*4
-    if role: sql+=" AND role=?"; p.append(role)
-    if status=='Active': sql+=" AND active=1"
-    elif status=='Disabled': sql+=" AND active=0"
-    sql+=" ORDER BY id"
-    return page(request,'users.html',rows=q(sql,p),search=search,role=role,status=status)
+def users_page(request:Request):
+    require_action(request,'admin'); return page(request,'users.html',rows=q("SELECT id,username,full_name,role,active,email,position,division,site,photo_path,last_login_at,created_at FROM users ORDER BY id"))
 
 @app.post("/users/create")
 def users_create(request:Request,username:str=Form(...),full_name:str=Form(...),password:str=Form(...),role:str=Form(...),email:str=Form(''),position:str=Form(''),division:str=Form('FMT'),site:str=Form('TBS')):
@@ -1028,13 +666,11 @@ def users_toggle(request:Request,uid:int):
 
 # ---------------- Admin / logs / files ----------------
 @app.get("/activity", response_class=HTMLResponse)
-def activity(request:Request,search:str='',pg:int=1):
+def activity(request:Request,search:str=''):
     require_action(request,'audit.view') if not can(current_user(request),'admin') else require_action(request,'admin')
     sql="SELECT a.*,u.full_name FROM audit_logs a LEFT JOIN users u ON u.id=a.user_id WHERE 1=1"; p=[]
     if search: sql+=" AND (a.action LIKE ? OR a.module LIKE ? OR a.record_ref LIKE ? OR u.full_name LIKE ?)"; p += [f"%{search}%"]*4
-    sql+=" ORDER BY a.id DESC"
-    rows,pgmeta=paginate_query(sql,p,pg)
-    return page(request,"activity.html",rows=rows,search=search,pgmeta=pgmeta)
+    sql+=" ORDER BY a.id DESC LIMIT 500"; return page(request,"activity.html",rows=q(sql,p),search=search)
 
 @app.get("/profile", response_class=HTMLResponse)
 def profile_page(request:Request):
@@ -1125,17 +761,10 @@ async def roles_save(request:Request):
     audit(u['id'],'Update Role Permissions','Administration','roles'); return RedirectResponse('/roles?saved=1',303)
 
 @app.get('/signatures',response_class=HTMLResponse)
-def signatures_page(request:Request, search:str='', status:str|None=None):
+def signatures_page(request:Request):
     u=require_action(request,'signature.view')
-    sql=("SELECT s.*,usr.full_name owner_name FROM signatures s JOIN users usr ON usr.id=s.owner_id "
-         "WHERE (s.owner_id=? OR s.visibility='Shared' OR (s.visibility='Role' AND (s.allowed_role=? OR s.allowed_role IS NULL)) OR ?='Administrator')")
-    p=[u['id'],u['role'],u['role']]
-    if search: sql+=" AND (s.name LIKE ? OR s.signer_name LIKE ? OR usr.full_name LIKE ?)"; p += [f"%{search}%"]*3
-    if status=='Active': sql+=" AND s.active=1"
-    elif status=='Disabled': sql+=" AND s.active=0"
-    sql+=" ORDER BY s.is_default DESC,s.id DESC"
-    rows=q(sql,p)
-    return page(request,'signatures.html',rows=rows,search=search,status=status)
+    rows=q("SELECT s.*,usr.full_name owner_name FROM signatures s JOIN users usr ON usr.id=s.owner_id WHERE s.owner_id=? OR s.visibility='Shared' OR (s.visibility='Role' AND (s.allowed_role=? OR s.allowed_role IS NULL)) OR ?='Administrator' ORDER BY s.is_default DESC,s.id DESC",(u['id'],u['role'],u['role']))
+    return page(request,'signatures.html',rows=rows)
 
 @app.post('/signatures/create')
 def signature_create(request:Request,name:str=Form(...),signer_name:str=Form(...),visibility:str=Form('Private'),allowed_role:str=Form(''),is_default:int=Form(0),image:UploadFile=File(...)):
@@ -1173,12 +802,10 @@ def brand_logo():
     candidates=[]
     if row and row['value']: candidates.append(BASE/row['value'])
     candidates.append(BASE/'uploads'/'branding'/'bdx.logo')
-    # Bundled default BDX identity mark, used when no custom branding has been configured.
-    candidates.append(BASE/'app'/'static'/'bdx-logo.png')
     for pth in candidates:
         if pth.is_file():
             try: mt=validate_image_file(pth)
-            except Exception: mt='image/png' if pth.suffix.lower()=='.png' else 'application/octet-stream'
+            except Exception: mt='application/octet-stream'
             return FileResponse(pth,media_type=mt,headers={'Cache-Control':'public, max-age=300'})
     raise HTTPException(404)
 
@@ -1218,20 +845,6 @@ def branding(request:Request,title:str=Form(...),subtitle:str=Form(...),footer:s
         rel,orig,_=save_image_upload(logo,'branding'); execute("INSERT INTO settings(key,value) VALUES('logo',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(rel,)); audit(u['id'],'Update Logo','Settings','branding',None,orig)
     audit(u['id'],'Update','Settings','branding',None,str(vals)); return RedirectResponse('/settings',303)
 
-@app.post("/settings/telegram")
-def settings_telegram(request:Request,telegram_enabled:str=Form('0'),telegram_token:str=Form(''),telegram_chat:str=Form('')):
-    u=require_action(request,'admin')
-    vals={'telegram_enabled':'1' if telegram_enabled in ('1','on','true') else '0','telegram_token':telegram_token.strip(),'telegram_chat':telegram_chat.strip()}
-    for k,v in vals.items(): execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(k,v))
-    audit(u['id'],'Update','Settings','telegram',None,'enabled' if vals['telegram_enabled']=='1' else 'disabled')
-    return RedirectResponse('/settings?telegram=saved',303)
-
-@app.post("/settings/telegram/test")
-def settings_telegram_test(request:Request):
-    require_action(request,'admin')
-    ok,detail=send_telegram(EVENT_TEMPLATES['test'])
-    return {'ok':ok,'detail':'sent' if ok else detail}
-
 @app.get("/files/{path:path}")
 def files(request:Request,path:str):
     if not current_user(request): raise HTTPException(401)
@@ -1245,4 +858,4 @@ def files(request:Request,path:str):
 def http_error(request:Request,exc:HTTPException):
     if wants_json(request): return JSONResponse({'ok':False,'detail':str(exc.detail)},status_code=exc.status_code)
     if exc.status_code==401: return RedirectResponse('/login',303)
-    return templates.TemplateResponse('error.html',{'request':request,'status':exc.status_code,'message':exc.detail,**_lang_ctx(request)},status_code=exc.status_code)
+    return templates.TemplateResponse('error.html',{'request':request,'status':exc.status_code,'message':exc.detail},status_code=exc.status_code)

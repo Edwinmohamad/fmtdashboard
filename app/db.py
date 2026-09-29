@@ -137,13 +137,12 @@ CREATE TABLE IF NOT EXISTS attendance_signature_placements (
  ny REAL NOT NULL,
  nw REAL NOT NULL,
  nh REAL NOT NULL,
- confirmed INTEGER NOT NULL DEFAULT 1,
- locked INTEGER NOT NULL DEFAULT 0,
  created_by INTEGER NOT NULL,
  updated_at TEXT NOT NULL,
  FOREIGN KEY(attendance_id) REFERENCES attendance(id) ON DELETE CASCADE,
  FOREIGN KEY(signature_id) REFERENCES signatures(id) ON DELETE CASCADE,
- FOREIGN KEY(created_by) REFERENCES users(id)
+ FOREIGN KEY(created_by) REFERENCES users(id),
+ UNIQUE(attendance_id,signature_id,page)
 );
 CREATE TABLE IF NOT EXISTS attendance_sign_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -301,44 +300,8 @@ def _add_column_if_missing(con, table: str, column: str, ddl: str):
         con.execute(f'ALTER TABLE {table} ADD COLUMN {column} {ddl}')
 
 
-def _migrate_placements_allow_multiple_per_page(con):
-    """Older deployments created attendance_signature_placements with
-    UNIQUE(attendance_id,signature_id,page), which capped a page to exactly one placement per
-    signature. SQLite can't drop a table constraint with ALTER TABLE, so an existing table carrying
-    that constraint is rebuilt without it (same columns, same data, same row ids) so a page can hold
-    more than one placement for the same signature -- e.g. stamping the same signer in more than one
-    approval box on one page. A brand-new database never has this constraint in the first place (the
-    CREATE TABLE above already omits it), so this is a no-op there."""
-    row = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='attendance_signature_placements'").fetchone()
-    if not row or not row['sql'] or 'UNIQUE' not in row['sql'].upper():
-        return
-    con.execute('ALTER TABLE attendance_signature_placements RENAME TO attendance_signature_placements_pre287')
-    con.execute('''CREATE TABLE attendance_signature_placements (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- attendance_id INTEGER NOT NULL,
- signature_id INTEGER NOT NULL,
- page INTEGER NOT NULL,
- nx REAL NOT NULL,
- ny REAL NOT NULL,
- nw REAL NOT NULL,
- nh REAL NOT NULL,
- created_by INTEGER NOT NULL,
- updated_at TEXT NOT NULL,
- FOREIGN KEY(attendance_id) REFERENCES attendance(id) ON DELETE CASCADE,
- FOREIGN KEY(signature_id) REFERENCES signatures(id) ON DELETE CASCADE,
- FOREIGN KEY(created_by) REFERENCES users(id)
-)''')
-    con.execute('''INSERT INTO attendance_signature_placements
-        (id,attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at)
-        SELECT id,attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at FROM attendance_signature_placements_pre287''')
-    con.execute('DROP TABLE attendance_signature_placements_pre287')
-
-
 def init_db():
     with connect() as con:
-        # Must run before the CREATE TABLE IF NOT EXISTS below, since that statement leaves an
-        # already-existing table (old constraint and all) untouched.
-        _migrate_placements_allow_multiple_per_page(con)
         con.executescript(SCHEMA)
         # Safe in-place migration for older deployments.
         for name, ddl in [
@@ -352,20 +315,6 @@ def init_db():
         ]:
             _add_column_if_missing(con,'attendance',name,ddl)
         _add_column_if_missing(con,'attendance_versions','checksum','TEXT')
-        # A placement created interactively as an *extra* instance of an already-placed signature
-        # starts unconfirmed (see signing_placement/_save_placement_row in main.py); every placement
-        # that predates this column -- and every placement saved through the older single-instance
-        # paths that never set it explicitly -- defaults to confirmed via the column default above,
-        # so nothing already placed silently drops out of signing after this upgrade.
-        _add_column_if_missing(con,'attendance_signature_placements','confirmed','INTEGER NOT NULL DEFAULT 1')
-        # Whether a placement's position is explicitly locked by a human via the confirm checkbox
-        # (see /api/signing/placement/confirm in main.py) -- separate from `confirmed` above.
-        # `confirmed` alone used to also drive whether a box could still be dragged, which meant the
-        # ordinary single-signature flow (confirmed=1 by column default, never touched by the user)
-        # locked itself the moment its very first drag auto-saved -- a real regression reported after
-        # 2.8.9 shipped. `locked` defaults to 0 for every placement, old and new alike, so nothing is
-        # ever drag-locked unless a human explicitly checks the box for it.
-        _add_column_if_missing(con,'attendance_signature_placements','locked','INTEGER NOT NULL DEFAULT 0')
         # Indexes MUST be created only after all legacy-column migrations above.
         # Older deployments may have an attendance table without batch_id; creating
         # idx_attendance_batch before ALTER TABLE causes startup to fail.
