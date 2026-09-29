@@ -164,6 +164,8 @@ CREATE TABLE IF NOT EXISTS signature_position_templates (
  page_count INTEGER NOT NULL,
  page_width REAL NOT NULL,
  page_height REAL NOT NULL,
+ page_rotation INTEGER NOT NULL DEFAULT 0,
+ layout_fingerprint TEXT,
  page INTEGER NOT NULL,
  nx REAL NOT NULL,
  ny REAL NOT NULL,
@@ -315,6 +317,8 @@ def init_db():
         ]:
             _add_column_if_missing(con,'attendance',name,ddl)
         _add_column_if_missing(con,'attendance_versions','checksum','TEXT')
+        _add_column_if_missing(con,'signature_position_templates','page_rotation','INTEGER NOT NULL DEFAULT 0')
+        _add_column_if_missing(con,'signature_position_templates','layout_fingerprint','TEXT')
         # Indexes MUST be created only after all legacy-column migrations above.
         # Older deployments may have an attendance table without batch_id; creating
         # idx_attendance_batch before ALTER TABLE causes startup to fail.

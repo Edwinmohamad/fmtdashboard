@@ -1,27 +1,15 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Sign In — FMT Operations Dashboard</title><link rel="stylesheet" href="/static/app.css?v=3.0.0"></head>
-<body class="login-body">
-<div class="login-shell">
-  <section class="login-visual">
-    <div class="login-grid-pattern"></div><div class="login-orb orb-a"></div><div class="login-orb orb-b"></div>
-    <div class="login-visual-content">
-      <div class="login-company"><div class="logo-wrap login-logo-wrap"><img src="/brand/logo" alt="BDX" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"><div class="logo-mark" style="display:none">BDX</div></div><div><span>BDX • SITE TBS</span><b>Facility Management Division</b></div></div>
-      <div class="login-message"><span class="login-kicker"><i></i> OPERATIONS CONTROL CENTER</span><h1>Operate with clarity.<br><em>Act with confidence.</em></h1><p>One secure workspace for attendance signing, facility inventory, change management, and operational audit.</p></div>
-      <div class="login-status-grid"><div><span>Document Ops</span><b>Ready</b><small>PDF signing & audit</small></div><div><span>Inventory</span><b>Online</b><small>Assets, tools & stock</small></div><div><span>Change Mgmt</span><b>Active</b><small>Change, incident & problem</small></div></div>
-      <div class="login-system-line"><span><i></i> System operational</span><span>Site TBS • Production</span></div>
-    </div>
-  </section>
-  <section class="login-panel">
-    <div class="login-form-wrap">
-      <div class="login-mobile-brand"><div class="logo-wrap"><img src="/brand/logo" alt="BDX"></div><div><b>FMT Operations</b><span>Site TBS</span></div></div>
-      <span class="eyebrow login-eyebrow">SECURE ACCESS</span><h2>Welcome back</h2><p class="login-subtitle">Sign in to the FMT Operations Dashboard.</p>
-      {% if error %}<div class="alert danger">{{error}}</div>{% endif %}
-      <form method="post" action="/login" class="stack login-form">
-        <label><span>Username</span><div class="input-icon-wrap"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-5 3-8 8-8s8 3 8 8"/></svg><input name="username" autocomplete="username" placeholder="Enter username" required autofocus></div></label>
-        <label><span>Password</span><div class="input-icon-wrap"><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><input name="password" type="password" autocomplete="current-password" placeholder="Enter password" required></div></label>
-        <button class="btn primary full login-submit">Sign In <span>→</span></button>
-      </form>
-      <div class="login-secure-note"><svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 2.7 8 7 10 4.3-2 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-5"/></svg><div><b>Protected internal workspace</b><span>Your activity is recorded in the operational audit trail.</span></div></div>
-      <div class="login-footer"><span>FMT Division • Site TBS</span><small>Powered by Edwin Mohamad</small></div>
-    </div>
-  </section>
-</div></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<script>(function(){const t=localStorage.getItem('fmt-theme')||'system';const d=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light';})();</script>
+<title>Sign In — FMT Operations Dashboard</title><link rel="stylesheet" href="/static/app.css?v=3.2.0"></head>
+<body class="login-body"><main class="login-shell"><section class="login-panel"><div class="login-form-wrap">
+  <div class="login-mobile-brand"><div class="logo-wrap"><img src="/brand/logo" alt="BDX" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"><div class="logo-mark" style="display:none">BDX</div></div><div><b>FMT Operations Dashboard</b><span>Facility Management Division • Site TBS</span></div></div>
+  <span class="eyebrow login-eyebrow">SECURE WORKSPACE</span><h2>Welcome back</h2><p class="login-subtitle">Sign in to continue to your operations workspace.</p>
+  {% if error %}<div class="alert danger">{{error}}</div>{% endif %}
+  <form method="post" action="/login" class="stack login-form">
+    <label><span>Username</span><div class="input-icon-wrap"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-5 3-8 8-8s8 3 8 8"/></svg><input name="username" autocomplete="username" placeholder="Username" required autofocus></div></label>
+    <label><span>Password</span><div class="input-icon-wrap"><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><input name="password" type="password" autocomplete="current-password" placeholder="Password" required></div></label>
+    <button class="btn primary full login-submit" type="submit">Sign In <span>→</span></button>
+  </form>
+  <div class="login-secure-note"><svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 2.7 8 7 10 4.3-2 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-5"/></svg><div><b>Protected internal workspace</b><span>Sign-in and operational actions are recorded in the audit trail.</span></div></div>
+  <div class="login-footer"><span>FMT Division • Site TBS</span><small>Powered by Edwin Mohamad</small></div>
+</div></section></main></body></html>

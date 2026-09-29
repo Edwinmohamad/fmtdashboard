@@ -12,7 +12,7 @@ from .db import init_db, q, execute, now, audit, BASE, connect
 from .auth import bootstrap_admin, current_user, verify_password, create_session, delete_session, COOKIE, COOKIE_SECURE, SESSION_HOURS, can, hash_password
 from .services import (save_upload, save_image_upload, inventory_import_xlsx, preview_inventory_xlsx, export_inventory_xlsx,
     ALLOWED_IMAGE, ALLOWED_TICKET, TICKET_TRANSITIONS, ATTENDANCE_TRANSITIONS, allowed_attendance_transitions, allowed_ticket_transitions,
-    pdf_info, render_pdf_page, sign_pdf, sha256_file, validate_image_file)
+    pdf_info, pdf_layout_fingerprint, render_pdf_page, sign_pdf, sha256_file, validate_image_file)
 
 app = FastAPI(title="FMT Operations Dashboard — Site TBS", docs_url=None, redoc_url=None)
 
@@ -85,6 +85,21 @@ def remove_uploaded_file(rel_path: str|None):
 
 def wants_json(request: Request) -> bool:
     return request.headers.get('X-Requested-With','').lower() in {'xmlhttprequest','fetch'} or 'application/json' in request.headers.get('accept','')
+
+
+def signature_allowed(sig, user) -> bool:
+    if not sig or not user or not sig['active']:
+        return False
+    return bool(user['role']=='Administrator' or sig['owner_id']==user['id'] or sig['visibility']=='Shared' or (sig['visibility']=='Role' and (not sig['allowed_role'] or sig['allowed_role']==user['role'])))
+
+def ensure_signable_attendance(a):
+    if not a:
+        raise HTTPException(404,'Document not found')
+    if a['status'] in ('Signed','Final','Archived'):
+        raise HTTPException(409,'This document is already signed or locked. Create a revision before signing again.')
+    if a['status'] not in ('Uploaded','Checking','Ready to Sign'):
+        raise HTTPException(409,f"Document status {a['status']} is not signable")
+    return a
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
@@ -199,13 +214,13 @@ def attendance_delete(request:Request,aid:int):
 @app.get('/attendance/signing', response_class=HTMLResponse)
 def attendance_signing_workspace(request:Request,batch:str|None=None):
     u=require_action(request,'attendance.view')
-    sql="SELECT a.*,v.original_name FROM attendance a JOIN attendance_versions v ON v.attendance_id=a.id AND v.version=a.current_version WHERE a.status IN ('Uploaded','Checking','Ready to Sign','Signed')"; p=[]
+    sql="SELECT a.*,v.original_name FROM attendance a JOIN attendance_versions v ON v.attendance_id=a.id AND v.version=a.current_version WHERE a.status IN ('Uploaded','Checking','Ready to Sign')"; p=[]
     if batch:
         sql += " AND a.batch_id=(SELECT id FROM attendance_batches WHERE batch_token=?)"; p.append(batch)
     sql += ' ORDER BY a.id DESC LIMIT 200'
     docs=[dict(r) for r in q(sql,p)]
     sigs=q("SELECT s.*,u.full_name owner_name FROM signatures s JOIN users u ON u.id=s.owner_id WHERE s.active=1 AND (s.owner_id=? OR s.visibility='Shared' OR (s.visibility='Role' AND (s.allowed_role=? OR s.allowed_role IS NULL))) ORDER BY s.is_default DESC,s.id DESC",(u['id'],u['role'])) if can(u,'signature.use') or can(u,'attendance.sign') else []
-    placements=q("SELECT p.*,s.name signature_name,s.file_path FROM attendance_signature_placements p JOIN signatures s ON s.id=p.signature_id WHERE p.attendance_id IN (SELECT id FROM attendance WHERE status IN ('Uploaded','Checking','Ready to Sign','Signed')) ORDER BY p.id")
+    placements=q("SELECT p.*,s.name signature_name,s.file_path FROM attendance_signature_placements p JOIN signatures s ON s.id=p.signature_id WHERE p.attendance_id IN (SELECT id FROM attendance WHERE status IN ('Uploaded','Checking','Ready to Sign')) ORDER BY p.id")
     plmap={}
     for r in placements: plmap.setdefault(r['attendance_id'],[]).append(dict(r))
     return page(request,'attendance_signing.html',docs=docs,signatures=sigs,placements=plmap,batch=batch)
@@ -220,12 +235,16 @@ def attendance_page_png(request:Request,aid:int,page_no:int):
 
 @app.get('/attendance/{aid}/signed-preview/{page_no}.png')
 def attendance_signed_preview(request:Request,aid:int,page_no:int):
-    require_action(request,'attendance.view')
+    require_action(request,'attendance.sign')
     v=q("SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1",(aid,),one=True)
     if not v: raise HTTPException(404)
     pls=[dict(r) for r in q("SELECT * FROM attendance_signature_placements WHERE attendance_id=?",(aid,))]
     if not pls: raise HTTPException(400,'Save a signature placement first')
-    sigpaths={r['id']:BASE/r['file_path'] for r in q("SELECT * FROM signatures WHERE id IN (SELECT signature_id FROM attendance_signature_placements WHERE attendance_id=?)",(aid,))}
+    sigrows=q("SELECT * FROM signatures WHERE id IN (SELECT signature_id FROM attendance_signature_placements WHERE attendance_id=?)",(aid,))
+    u=current_user(request)
+    for sig in sigrows:
+        if not signature_allowed(sig,u): raise HTTPException(403,'A placed signature is no longer authorized for this user')
+    sigpaths={r['id']:BASE/r['file_path'] for r in sigrows}
     # Generate a temporary signed PDF using the exact same save/reopen pipeline as final signing.
     # This makes Final Preview a faithful representation of output placement, including rotated pages.
     tmp=BASE/'uploads'/'attendance'/f'.preview-{aid}-{secrets.token_hex(6)}.pdf'
@@ -242,7 +261,8 @@ def signing_placement(request:Request,payload:dict=Body(...)):
     aid=int(payload.get('attendance_id')); sid=int(payload.get('signature_id')); page_no=int(payload.get('page',1))
     a=q('SELECT * FROM attendance WHERE id=?',(aid,),one=True); sig=q('SELECT * FROM signatures WHERE id=? AND active=1',(sid,),one=True)
     if not a or not sig: raise HTTPException(404,'Document or signature not found')
-    if not (sig['owner_id']==u['id'] or sig['visibility']=='Shared' or (sig['visibility']=='Role' and (not sig['allowed_role'] or sig['allowed_role']==u['role'])) or u['role']=='Administrator'):
+    ensure_signable_attendance(a)
+    if not signature_allowed(sig,u):
         raise HTTPException(403,'You are not allowed to use this signature')
     vals={k:float(payload.get(k,0)) for k in ('nx','ny','nw','nh')}
     if vals['nw']<=0 or vals['nh']<=0 or vals['nx']<0 or vals['ny']<0 or vals['nx']+vals['nw']>1.000001 or vals['ny']+vals['nh']>1.000001: raise HTTPException(400,'Signature box is outside the page')
@@ -253,19 +273,23 @@ def signing_placement(request:Request,payload:dict=Body(...)):
     execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,created_by=excluded.created_by,updated_at=excluded.updated_at",
             (aid,sid,page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now()))
     if payload.get('remember'):
-        execute("INSERT INTO signature_position_templates(signature_id,page_count,page_width,page_height,page,nx,ny,nw,nh,label,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'Saved position',?,?) ON CONFLICT(signature_id,page_count,page_width,page_height,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
-                (sid,ainfo['page_count'],round(srcw,2),round(srch,2),page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now()))
+        execute("INSERT INTO signature_position_templates(signature_id,page_count,page_width,page_height,page_rotation,layout_fingerprint,page,nx,ny,nw,nh,label,created_by,updated_at) VALUES(?,?,?,?,?,?,?, ?,?,?,?,'Saved position',?,?) ON CONFLICT(signature_id,page_count,page_width,page_height,page) DO UPDATE SET page_rotation=excluded.page_rotation,layout_fingerprint=excluded.layout_fingerprint,nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
+                (sid,ainfo['page_count'],round(srcw,2),round(srch,2),int(src_page.get('rotation',0)),pdf_layout_fingerprint(ainfo),page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now()))
     # Apply only when the destination page itself has the same displayed dimensions.
     applied=[aid]; mismatched=[]
     for x in payload.get('apply_ids') or []:
         x=int(x)
         if x==aid: continue
-        b=q('SELECT id FROM attendance WHERE id=?',(x,),one=True)
+        b=q('SELECT * FROM attendance WHERE id=?',(x,),one=True)
+        if b and b['status'] not in ('Uploaded','Checking','Ready to Sign'):
+            mismatched.append(x); continue
         bv=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(x,),one=True) if b else None
         if not bv: continue
         try: binfo=pdf_info(BASE/bv['file_path'])
         except Exception: mismatched.append(x); continue
-        if binfo['page_count']==ainfo['page_count'] and page_no<=binfo['page_count'] and abs(binfo['pages'][page_no-1]['width']-srcw)<1 and abs(binfo['pages'][page_no-1]['height']-srch)<1:
+        dst_page=binfo['pages'][page_no-1] if page_no<=binfo['page_count'] else None
+        same_layout=bool(dst_page and binfo['page_count']==ainfo['page_count'] and abs(dst_page['width']-srcw)<1 and abs(dst_page['height']-srch)<1 and int(dst_page.get('rotation',0))==int(src_page.get('rotation',0)) and pdf_layout_fingerprint(binfo)==pdf_layout_fingerprint(ainfo))
+        if same_layout:
             execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
                     (x,sid,page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now())); applied.append(x)
         else: mismatched.append(x)
@@ -274,49 +298,81 @@ def signing_placement(request:Request,payload:dict=Body(...)):
 @app.post('/api/signing/apply-template')
 def apply_signature_template(request:Request,payload:dict=Body(...)):
     u=require_action(request,'attendance.sign'); sid=int(payload.get('signature_id')); ids=[int(x) for x in payload.get('attendance_ids') or []]
+    sig=q('SELECT * FROM signatures WHERE id=? AND active=1',(sid,),one=True)
+    if not signature_allowed(sig,u):
+        raise HTTPException(403,'You are not allowed to use this signature')
     applied=[]; mismatched=[]; applied_placements=[]
     for aid in ids:
-        a=q('SELECT id FROM attendance WHERE id=?',(aid,),one=True)
-        v=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True) if a else None
-        if not v: continue
+        a=q('SELECT * FROM attendance WHERE id=?',(aid,),one=True)
+        if not a or a['status'] not in ('Uploaded','Checking','Ready to Sign'):
+            mismatched.append(aid); continue
+        v=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
+        if not v: mismatched.append(aid); continue
         try: info=pdf_info(BASE/v['file_path'])
         except Exception: mismatched.append(aid); continue
+        fp=pdf_layout_fingerprint(info)
         candidates=q("SELECT * FROM signature_position_templates WHERE signature_id=? AND page_count=? ORDER BY updated_at DESC",(sid,info['page_count']))
         t=None
         for cand in candidates:
             pn=int(cand['page'])
-            if 1<=pn<=info['page_count'] and abs(info['pages'][pn-1]['width']-cand['page_width'])<1 and abs(info['pages'][pn-1]['height']-cand['page_height'])<1:
+            if not (1<=pn<=info['page_count']): continue
+            pinfo=info['pages'][pn-1]
+            same_size=abs(pinfo['width']-cand['page_width'])<1 and abs(pinfo['height']-cand['page_height'])<1
+            same_rotation=int(pinfo.get('rotation',0))==int(cand['page_rotation'] or 0)
+            same_fp=not cand['layout_fingerprint'] or cand['layout_fingerprint']==fp
+            if same_size and same_rotation and same_fp:
                 t=cand; break
         if not t: mismatched.append(aid); continue
-        execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
-                (aid,sid,t['page'],t['nx'],t['ny'],t['nw'],t['nh'],u['id'],now())); applied.append(aid); applied_placements.append({'attendance_id':aid,'signature_id':sid,'page':t['page'],'nx':t['nx'],'ny':t['ny'],'nw':t['nw'],'nh':t['nh']})
+        execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,created_by=excluded.created_by,updated_at=excluded.updated_at",
+                (aid,sid,t['page'],t['nx'],t['ny'],t['nw'],t['nh'],u['id'],now()))
+        applied.append(aid); applied_placements.append({'attendance_id':aid,'signature_id':sid,'page':t['page'],'nx':t['nx'],'ny':t['ny'],'nw':t['nw'],'nh':t['nh']})
     return {'ok':True,'applied':applied,'mismatched':mismatched,'placements':applied_placements}
 
 @app.post('/api/signing/sign')
 def signing_sign(request:Request,payload:dict=Body(...)):
-    u=require_action(request,'attendance.sign_bulk'); ids=[int(x) for x in payload.get('attendance_ids') or []]
+    u=require_action(request,'attendance.sign_bulk')
+    if not can(u,'attendance.sign'):
+        raise HTTPException(403,'Bulk signing also requires attendance.sign permission')
+    ids=[int(x) for x in payload.get('attendance_ids') or []]
     if not ids: raise HTTPException(400,'Select at least one PDF')
     results=[]
     for aid in ids:
+        out=None
         try:
-            a=q('SELECT * FROM attendance WHERE id=?',(aid,),one=True)
-            if not a: raise HTTPException(404,'Document not found')
-            if a['status'] in ('Final','Archived'): raise HTTPException(400,'Final document is locked')
+            a=q('SELECT * FROM attendance WHERE id=?',(aid,),one=True); ensure_signable_attendance(a)
             v=q('SELECT * FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
+            if not v: raise HTTPException(404,'Document version not found')
             pls=[dict(r) for r in q('SELECT * FROM attendance_signature_placements WHERE attendance_id=? ORDER BY page,id',(aid,))]
             if not pls: raise HTTPException(400,'Signature position is not configured')
-            sigpaths={r['id']:BASE/r['file_path'] for r in q("SELECT * FROM signatures WHERE id IN (SELECT signature_id FROM attendance_signature_placements WHERE attendance_id=?)",(aid,))}
+            sigrows=q("SELECT * FROM signatures WHERE id IN (SELECT signature_id FROM attendance_signature_placements WHERE attendance_id=?)",(aid,))
+            sigmap={int(r['id']):r for r in sigrows}
+            for pl in pls:
+                sig=sigmap.get(int(pl['signature_id']))
+                if not signature_allowed(sig,u):
+                    raise HTTPException(403,f"Signature {pl['signature_id']} is no longer authorized for this user")
+            sigpaths={int(r['id']):BASE/r['file_path'] for r in sigrows}
             out_rel=f"uploads/attendance/signed/{aid}-{secrets.token_hex(6)}.pdf"; out=BASE/out_rel
             verify=sign_pdf(BASE/v['file_path'],out,pls,sigpaths)
             ver=int(a['current_version'])+1; ts=now()
-            execute("INSERT INTO attendance_versions(attendance_id,version,file_path,original_name,notes,status,uploaded_by,uploaded_at,checksum) VALUES(?,?,?,?,?,'Signed',?,?,?)",
-                    (aid,ver,out_rel,f"SIGNED-{v['original_name']}",'Signed from visual placement workspace',u['id'],ts,verify['checksum']))
-            execute("UPDATE attendance SET current_version=?,status='Signed',signed_file_path=?,final_checksum=?,signed_by=?,signed_at=?,updated_at=? WHERE id=?",(ver,out_rel,verify['checksum'],u['id'],ts,ts,aid))
-            for pl in pls:
-                execute("INSERT INTO attendance_sign_events(attendance_id,version,signature_id,page,nx,ny,nw,nh,signed_by,signed_at,checksum) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(aid,ver,pl['signature_id'],pl['page'],pl['nx'],pl['ny'],pl['nw'],pl['nh'],u['id'],ts,verify['checksum']))
-            execute("DELETE FROM attendance_signature_placements WHERE attendance_id=?",(aid,))
-            audit(u['id'],'Sign PDF','Attendance',str(aid),None,verify['checksum']); results.append({'id':aid,'ok':True,'checksum':verify['checksum']})
+            with connect() as con:
+                try:
+                    con.execute('BEGIN IMMEDIATE')
+                    fresh=con.execute('SELECT * FROM attendance WHERE id=?',(aid,)).fetchone()
+                    if not fresh or fresh['status'] not in ('Uploaded','Checking','Ready to Sign'):
+                        raise HTTPException(409,'Document status changed while signing. Refresh and try again.')
+                    con.execute("INSERT INTO attendance_versions(attendance_id,version,file_path,original_name,notes,status,uploaded_by,uploaded_at,checksum) VALUES(?,?,?,?,?,'Signed',?,?,?)",
+                                (aid,ver,out_rel,f"SIGNED-{v['original_name']}",'Signed from visual placement workspace',u['id'],ts,verify['checksum']))
+                    con.execute("UPDATE attendance SET current_version=?,status='Signed',signed_file_path=?,final_checksum=?,signed_by=?,signed_at=?,updated_at=? WHERE id=?",(ver,out_rel,verify['checksum'],u['id'],ts,ts,aid))
+                    for pl in pls:
+                        con.execute("INSERT INTO attendance_sign_events(attendance_id,version,signature_id,page,nx,ny,nw,nh,signed_by,signed_at,checksum) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(aid,ver,pl['signature_id'],pl['page'],pl['nx'],pl['ny'],pl['nw'],pl['nh'],u['id'],ts,verify['checksum']))
+                    con.execute('DELETE FROM attendance_signature_placements WHERE attendance_id=?',(aid,))
+                    con.execute('INSERT INTO audit_logs(user_id,action,module,record_ref,old_value,new_value,created_at) VALUES(?,?,?,?,?,?,?)',(u['id'],'Sign PDF','Attendance',str(aid),fresh['status'],verify['checksum'],ts))
+                    con.commit()
+                except Exception:
+                    con.rollback(); raise
+            results.append({'id':aid,'ok':True,'checksum':verify['checksum']})
         except Exception as exc:
+            if out: out.unlink(missing_ok=True)
             detail=exc.detail if isinstance(exc,HTTPException) else str(exc)
             results.append({'id':aid,'ok':False,'error':detail})
     ok=sum(1 for r in results if r['ok'])
@@ -360,11 +416,11 @@ def resolve_finding(request:Request, aid:int, fid:int):
 def attendance_revision(request:Request, aid:int, notes:str=Form(''), pdf:UploadFile=File(...)):
     u=require_action(request,'edit'); a=q("SELECT * FROM attendance WHERE id=?",(aid,),one=True)
     if not a: raise HTTPException(404)
-    if a['status'] != 'Need Revision': raise HTTPException(400,'A new revision can only be uploaded when status is Need Revision')
+    if a['status'] not in ('Need Revision','Signed'): raise HTTPException(400,'A new revision can only be uploaded when revision is requested or after a Signed version')
     if Path(pdf.filename or '').suffix.lower()!='.pdf': raise HTTPException(400,'Revision must be PDF')
     rel,orig=save_upload(pdf,'attendance',{'.pdf'}); ver=a['current_version']+1; ts=now()
     execute("INSERT INTO attendance_versions(attendance_id,version,file_path,original_name,notes,status,uploaded_by,uploaded_at) VALUES(?,?,?,?,?,?,?,?)",(aid,ver,rel,orig,notes,'Checking',u['id'],ts))
-    execute("UPDATE attendance SET current_version=?,status='Checking',updated_at=? WHERE id=?",(ver,ts,aid)); audit(u['id'],'Upload Revision','Attendance',str(aid),str(a['current_version']),str(ver)); return RedirectResponse(f"/attendance/{aid}",303)
+    execute("UPDATE attendance SET current_version=?,status='Checking',signed_file_path=NULL,final_checksum=NULL,signed_by=NULL,signed_at=NULL,updated_at=? WHERE id=?",(ver,ts,aid)); execute("DELETE FROM attendance_signature_placements WHERE attendance_id=?",(aid,)); audit(u['id'],'Upload Revision','Attendance',str(aid),str(a['current_version']),str(ver)); return RedirectResponse(f"/attendance/{aid}",303)
 
 @app.post("/attendance/{aid}/status")
 def attendance_status(request:Request, aid:int, status:str=Form(...), note:str=Form('')):
@@ -768,8 +824,11 @@ def signatures_page(request:Request):
 
 @app.post('/signatures/create')
 def signature_create(request:Request,name:str=Form(...),signer_name:str=Form(...),visibility:str=Form('Private'),allowed_role:str=Form(''),is_default:int=Form(0),image:UploadFile=File(...)):
-    u=require_action(request,'signature.create') if can(current_user(request),'signature.create') else require_action(request,'attendance.sign')
+    cu=current_user(request)
+    u=require_action(request,'signature.create') if can(cu,'signature.create') else require_action(request,'attendance.sign')
     if visibility not in ('Private','Role','Shared'): raise HTTPException(400,'Invalid signature visibility')
+    if not can(u,'signature.manage') and u['role']!='Administrator':
+        visibility='Private'; allowed_role='' 
     rel,orig,_=save_image_upload(image,'signatures')
     if is_default: execute('UPDATE signatures SET is_default=0 WHERE owner_id=?',(u['id'],))
     sid=execute('INSERT INTO signatures(name,signer_name,owner_id,visibility,allowed_role,file_path,active,is_default,created_at) VALUES(?,?,?,?,?,?,1,?,?)',(name.strip(),signer_name.strip(),u['id'],visibility,allowed_role or None,rel,1 if is_default else 0,now()))
@@ -777,9 +836,12 @@ def signature_create(request:Request,name:str=Form(...),signer_name:str=Form(...
 
 @app.post('/signatures/{sid}/toggle')
 def signature_toggle(request:Request,sid:int):
-    u=require_action(request,'signature.manage') if can(current_user(request),'signature.manage') else require_action(request,'attendance.sign')
+    u=current_user(request)
+    if not u: raise HTTPException(401)
     sig=q('SELECT * FROM signatures WHERE id=?',(sid,),one=True)
-    if not sig or (sig['owner_id']!=u['id'] and u['role']!='Administrator'): raise HTTPException(404)
+    if not sig: raise HTTPException(404,'Signature not found')
+    if not (u['role']=='Administrator' or can(u,'signature.manage') or (sig['owner_id']==u['id'] and can(u,'attendance.sign'))):
+        raise HTTPException(403,'You are not allowed to manage this signature')
     execute('UPDATE signatures SET active=? WHERE id=?',(0 if sig['active'] else 1,sid)); audit(u['id'],'Toggle Signature','Signature',str(sid)); return RedirectResponse('/signatures',303)
 
 @app.post('/signatures/{sid}/delete')

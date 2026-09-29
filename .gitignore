@@ -4,17 +4,19 @@
 .env.production
 .env.development
 .env.staging
-
-# Keep example config in repository
 !.env.example
 
-# Runtime data
+# Runtime / persistent data
 data/
 uploads/
 backups/
 logs/
 
-# Databases
+# Keep empty runtime directories when needed
+!data/.gitkeep
+!uploads/.gitkeep
+
+# Database files
 *.db
 *.db-shm
 *.db-wal

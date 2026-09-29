@@ -37,6 +37,9 @@
     const profileBtn=document.getElementById('profileMenuBtn'),profileMenu=document.getElementById('profileMenu');
     profileBtn?.addEventListener('click',e=>{e.stopPropagation();const open=!profileMenu.hidden;profileMenu.hidden=open;profileBtn.setAttribute('aria-expanded',String(!open))});
     document.addEventListener('click',e=>{if(profileMenu&&!profileMenu.hidden&&!profileMenu.contains(e.target)&&e.target!==profileBtn){profileMenu.hidden=true;profileBtn?.setAttribute('aria-expanded','false')}});
+    const notifyBtn=document.getElementById('notifyBtn'),notifyPanel=document.getElementById('notifyPanel');
+    notifyBtn?.addEventListener('click',e=>{e.stopPropagation();const open=!notifyPanel.hidden;notifyPanel.hidden=open;notifyBtn.setAttribute('aria-expanded',String(!open));if(profileMenu&&!profileMenu.hidden){profileMenu.hidden=true;profileBtn?.setAttribute('aria-expanded','false')}});
+    document.addEventListener('click',e=>{if(notifyPanel&&!notifyPanel.hidden&&!notifyPanel.contains(e.target)&&e.target!==notifyBtn){notifyPanel.hidden=true;notifyBtn?.setAttribute('aria-expanded','false')}});
     document.querySelectorAll('.nav-link').forEach(a=>{try{const u=new URL(a.href,location.origin),cur=new URL(location.href);let active=u.pathname===cur.pathname;if(active&&u.pathname==='/tickets'&&u.searchParams.get('type'))active=u.searchParams.get('type')===cur.searchParams.get('type');if(active)a.classList.add('active')}catch(_e){}});
     document.querySelectorAll('form[data-confirm]').forEach(f=>f.addEventListener('submit',e=>{if(!confirm(f.dataset.confirm))e.preventDefault()}));
     const modal=document.getElementById('commandModal'),btn=document.getElementById('commandBtn'),search=document.getElementById('commandSearch'),hints=modal?.querySelector('.command-hints');
@@ -73,16 +76,16 @@
   function initSigning(){
     const ws=document.getElementById('signWorkspace');if(!ws)return;
     const pageImg=document.getElementById('pdfPageImage'),wrap=document.getElementById('pageWrap'),box=document.getElementById('signatureBox'),sigImg=document.getElementById('signatureImage'),sigSel=document.getElementById('signatureSelect');
-    const prevBtn=document.getElementById('prevPage'),nextBtn=document.getElementById('nextPage'),previewBtn=document.getElementById('previewExact');
-    let current=null,page=1,pages=1,drag=null,resize=null;
+    const prevBtn=document.getElementById('prevPage'),nextBtn=document.getElementById('nextPage'),previewBtn=document.getElementById('previewExact'),signBtn=document.getElementById('signSelected');
+    let current=null,page=1,pages=1,drag=null,resize=null,previewVerified=false;
     const selectChecks=()=>[...document.querySelectorAll('.doc-check:checked')].map(x=>Number(x.value));
-    function updateCount(){const n=selectChecks().length,c=document.getElementById('selectedCount'),q=document.getElementById('selectedQueueBadge');if(c)c.textContent=String(n);if(q)q.textContent=n+' selected'}
+    function updateCount(){const n=selectChecks().length,c=document.getElementById('selectedCount'),q=document.getElementById('selectedQueueBadge');if(c)c.textContent=String(n);if(q)q.textContent=n+' selected';setNavState()}
     document.querySelectorAll('.doc-check').forEach(c=>c.addEventListener('change',updateCount));
     document.getElementById('selectAllDocs')?.addEventListener('change',e=>{document.querySelectorAll('.doc-check').forEach(c=>c.checked=e.target.checked);updateCount()});
 
     function currentSig(){const o=sigSel?.selectedOptions?.[0];return o&&o.value?{id:Number(o.value),src:o.dataset.src}:null}
     function setSigImage(){const s=currentSig();if(s&&current){sigImg.src=s.src;box.hidden=false}else{box.hidden=true}}
-    sigSel?.addEventListener('change',()=>{setSigImage();if(current)applyPlacement(placementFor())});
+    sigSel?.addEventListener('change',()=>{previewVerified=false;setSigImage();if(current)applyPlacement(placementFor());setNavState()});
 
     function placementFor(){
       const sid=currentSig()?.id;if(!sid||!current)return null;
@@ -94,15 +97,15 @@
       if(!pl){box.style.left='39%';box.style.top='45%';box.style.width='22%';box.style.height='10%';return}
       box.style.left=(Number(pl.nx)*100)+'%';box.style.top=(Number(pl.ny)*100)+'%';box.style.width=(Number(pl.nw)*100)+'%';box.style.height=(Number(pl.nh)*100)+'%';
     }
-    function setNavState(){if(prevBtn)prevBtn.disabled=!current||page<=1;if(nextBtn)nextBtn.disabled=!current||page>=pages;if(previewBtn)previewBtn.disabled=!current||!currentSig()}
+    function setNavState(){const ready=!!current&&!!currentSig();if(prevBtn)prevBtn.disabled=!current||page<=1;if(nextBtn)nextBtn.disabled=!current||page>=pages;if(previewBtn)previewBtn.disabled=!ready;if(signBtn)signBtn.disabled=!ready||!previewVerified||selectChecks().length===0;document.querySelectorAll('.signing-progress>div').forEach((el,i)=>el.classList.toggle('active',i===0?selectChecks().length>0:i===1?ready:i===2?previewVerified:false))}
     function loadDoc(btn){
-      if(!btn)return;current=Number(btn.dataset.id);pages=Math.max(1,Number(btn.dataset.pages||1));page=1;
+      if(!btn)return;current=Number(btn.dataset.id);pages=Math.max(1,Number(btn.dataset.pages||1));page=1;previewVerified=false;
       document.querySelectorAll('.queue-item').forEach(x=>x.classList.remove('active'));btn.closest('.queue-item')?.classList.add('active');
       const n=document.getElementById('currentDocName');if(n)n.textContent=btn.dataset.name||'Attendance PDF';
       wrap.hidden=false;document.getElementById('pdfEmpty').hidden=true;loadPage();
     }
     function loadPage(){
-      if(!current)return;document.getElementById('previewBanner').hidden=true;setNavState();
+      if(!current)return;previewVerified=false;document.getElementById('previewBanner').hidden=true;setNavState();
       const loading=document.getElementById('pdfLoading');if(loading)loading.hidden=false;pageImg.style.opacity='.15';
       pageImg.onload=()=>{if(loading)loading.hidden=true;pageImg.style.opacity='1';setSigImage();applyPlacement(placementFor());setNavState()};
       pageImg.onerror=()=>{if(loading)loading.hidden=true;pageImg.style.opacity='1';toast('PDF preview could not be loaded. Please reopen the document.','bad');wrap.hidden=true;document.getElementById('pdfEmpty').hidden=false};
@@ -121,8 +124,8 @@
     box?.addEventListener('pointerdown',e=>{if(e.target.classList.contains('resize-handle'))return;drag={x:e.clientX,y:e.clientY,left:box.offsetLeft,top:box.offsetTop};box.setPointerCapture(e.pointerId);e.preventDefault()});
     box?.querySelector('.resize-handle')?.addEventListener('pointerdown',e=>{resize={x:e.clientX,y:e.clientY,w:box.offsetWidth,h:box.offsetHeight};box.setPointerCapture(e.pointerId);e.stopPropagation();e.preventDefault()});
     box?.addEventListener('pointermove',e=>{
-      if(drag){const maxX=Math.max(0,wrap.clientWidth-box.offsetWidth),maxY=Math.max(0,wrap.clientHeight-box.offsetHeight);box.style.left=Math.max(0,Math.min(maxX,drag.left+e.clientX-drag.x))+'px';box.style.top=Math.max(0,Math.min(maxY,drag.top+e.clientY-drag.y))+'px'}
-      if(resize){const w=Math.max(36,Math.min(wrap.clientWidth-box.offsetLeft,resize.w+e.clientX-resize.x)),h=Math.max(22,Math.min(wrap.clientHeight-box.offsetTop,resize.h+e.clientY-resize.y));box.style.width=w+'px';box.style.height=h+'px'}
+      if(drag){previewVerified=false;const maxX=Math.max(0,wrap.clientWidth-box.offsetWidth),maxY=Math.max(0,wrap.clientHeight-box.offsetHeight);box.style.left=Math.max(0,Math.min(maxX,drag.left+e.clientX-drag.x))+'px';box.style.top=Math.max(0,Math.min(maxY,drag.top+e.clientY-drag.y))+'px'}
+      if(resize){previewVerified=false;const w=Math.max(36,Math.min(wrap.clientWidth-box.offsetLeft,resize.w+e.clientX-resize.x)),h=Math.max(22,Math.min(wrap.clientHeight-box.offsetTop,resize.h+e.clientY-resize.y));box.style.width=w+'px';box.style.height=h+'px'}
     });
     function clearPointer(){drag=null;resize=null}box?.addEventListener('pointerup',clearPointer);box?.addEventListener('pointercancel',clearPointer);
 
@@ -134,18 +137,17 @@
       for(const id of (res.applied||[current])){const key=String(id),existing=(window.FMT_SIGNING.placements[key]||[]).filter(x=>!(Number(x.signature_id)===sig.id&&Number(x.page)===page));existing.push({attendance_id:id,signature_id:sig.id,page,...n});window.FMT_SIGNING.placements[key]=existing}
       toast(`Placement saved${res.mismatched?.length?` • ${res.mismatched.length} PDF(s) need adjustment`:''}`);return res;
     }
-    document.getElementById('savePlacement')?.addEventListener('click',()=>savePlacement().catch(e=>toast(e.message,'bad')));
-    document.getElementById('useTemplate')?.addEventListener('click',async()=>{try{const sig=currentSig();if(!sig)throw new Error('Select a signature first');let ids=selectChecks();if(current&&!ids.includes(current))ids.unshift(current);if(!ids.length)throw new Error('Select PDF(s)');const r=await jsonPost('/api/signing/apply-template',{signature_id:sig.id,attendance_ids:ids});window.FMT_SIGNING.placements=window.FMT_SIGNING.placements||{};for(const pl of (r.placements||[])){const key=String(pl.attendance_id),arr=(window.FMT_SIGNING.placements[key]||[]).filter(x=>!(Number(x.signature_id)===Number(pl.signature_id)&&Number(x.page)===Number(pl.page)));arr.push(pl);window.FMT_SIGNING.placements[key]=arr}if(current&&r.applied.includes(current))applyPlacement(placementFor());toast(`${r.applied.length} matched • ${r.mismatched.length} need adjustment`)}catch(e){toast(e.message,'bad')}});
-    previewBtn?.addEventListener('click',async()=>{try{await savePlacement();const img=document.getElementById('exactPreviewImg');img.onload=()=>{document.getElementById('previewModal').hidden=false};img.onerror=()=>toast('Final preview could not be generated.','bad');img.src=`/attendance/${current}/signed-preview/${page}.png?v=${Date.now()}`}catch(e){toast(e.message,'bad')}});
+    document.getElementById('useTemplate')?.addEventListener('click',async()=>{try{previewVerified=false;const sig=currentSig();if(!sig)throw new Error('Select a signature first');let ids=selectChecks();if(current&&!ids.includes(current))ids.unshift(current);if(!ids.length)throw new Error('Select PDF(s)');const r=await jsonPost('/api/signing/apply-template',{signature_id:sig.id,attendance_ids:ids});window.FMT_SIGNING.placements=window.FMT_SIGNING.placements||{};for(const pl of (r.placements||[])){const key=String(pl.attendance_id),arr=(window.FMT_SIGNING.placements[key]||[]).filter(x=>!(Number(x.signature_id)===Number(pl.signature_id)&&Number(x.page)===Number(pl.page)));arr.push(pl);window.FMT_SIGNING.placements[key]=arr}if(current&&r.applied.includes(current))applyPlacement(placementFor());setNavState();toast(`${r.applied.length} matched • ${r.mismatched.length} need adjustment`)}catch(e){toast(e.message,'bad')}});
+    previewBtn?.addEventListener('click',async()=>{try{previewVerified=false;setNavState();await savePlacement();const img=document.getElementById('exactPreviewImg');img.onload=()=>{previewVerified=true;document.getElementById('previewBanner').hidden=false;document.getElementById('previewModal').hidden=false;setNavState();toast('Final preview verified','good')};img.onerror=()=>{previewVerified=false;setNavState();toast('Final preview could not be generated.','bad')};img.src=`/attendance/${current}/signed-preview/${page}.png?v=${Date.now()}`}catch(e){previewVerified=false;setNavState();toast(e.message,'bad')}});
     document.getElementById('closePreview')?.addEventListener('click',()=>document.getElementById('previewModal').hidden=true);
     document.getElementById('previewModal')?.addEventListener('click',e=>{if(e.target.id==='previewModal')e.currentTarget.hidden=true});
-    document.getElementById('signSelected')?.addEventListener('click',async()=>{
-      const ids=selectChecks();if(!ids.length){toast('Select at least one PDF','bad');return}if(!confirm(`Sign ${ids.length} selected PDF(s)? Original files will be preserved.`))return;
-      const btn=document.getElementById('signSelected');try{if(current)await savePlacement();btn.disabled=true;btn.textContent='Signing & verifying...';const r=await jsonPost('/api/signing/sign',{attendance_ids:ids});toast(`${r.signed} signed successfully${r.failed?` • ${r.failed} failed`:''}`,r.failed?'bad':'good');if(r.failed){console.error('Signing failures',r.results)}setTimeout(()=>location.reload(),900)}catch(e){toast(e.message,'bad')}finally{btn.disabled=false;btn.textContent='Sign Selected PDFs'}
+    signBtn?.addEventListener('click',async()=>{
+      const ids=selectChecks();if(!ids.length){toast('Select at least one PDF','bad');return}if(!previewVerified){toast('Run Final Preview before signing.','bad');return}if(!confirm(`Sign ${ids.length} selected PDF(s)? Original files will be preserved.`))return;
+      const btn=signBtn;try{btn.disabled=true;btn.textContent='Signing & verifying...';const r=await jsonPost('/api/signing/sign',{attendance_ids:ids});toast(`${r.signed} signed successfully${r.failed?` • ${r.failed} failed`:''}`,r.failed?'bad':'good');if(r.failed){console.error('Signing failures',r.results)}setTimeout(()=>location.reload(),900)}catch(e){toast(e.message,'bad')}finally{btn.textContent='Sign Selected PDFs';setNavState()}
     });
 
     updateCount();setNavState();
-    const first=document.querySelector('.doc-open');if(first)loadDoc(first);
+    const requested=new URLSearchParams(location.search).get('doc');const first=(requested&&document.querySelector(`.doc-open[data-id="${CSS.escape(requested)}"]`))||document.querySelector('.doc-open');if(first)loadDoc(first);
   }
 
   document.addEventListener('DOMContentLoaded',()=>{try{initCommon();initAttendanceUpload();initSigning()}catch(e){console.error(e);toast('Interface initialization failed. Please refresh the page.','bad')}});

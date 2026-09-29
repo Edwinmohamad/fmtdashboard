@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
-import os
+import os, hashlib, json
 from fastapi import UploadFile, HTTPException
 from openpyxl import load_workbook, Workbook
 from .db import q, execute, now, BASE
@@ -230,6 +230,45 @@ def pdf_info(path: Path) -> dict:
         raise HTTPException(400,f'PDF could not be read: {exc}')
 
 
+def pdf_layout_fingerprint(info: dict) -> str:
+    payload=[{"w":round(float(p["width"]),2),"h":round(float(p["height"]),2),"r":int(p.get("rotation",0))} for p in info.get("pages",[])]
+    return hashlib.sha256(json.dumps(payload,separators=(",",":"),sort_keys=True).encode()).hexdigest()[:24]
+
+
+def _placement_rect(page, pl: dict):
+    dr=page.rect
+    rr=fitz.Rect(float(pl['nx'])*dr.width,float(pl['ny'])*dr.height,(float(pl['nx'])+float(pl['nw']))*dr.width,(float(pl['ny'])+float(pl['nh']))*dr.height)
+    if page.rotation:
+        rr=rr * page.derotation_matrix
+    return rr
+
+
+def verify_signature_regions(original: Path, signed: Path, placements: list[dict]):
+    """Verify every expected signature region is visually changed in the signed PDF."""
+    src=fitz.open(original); out=fitz.open(signed)
+    try:
+        if src.page_count != out.page_count:
+            raise HTTPException(500,'Signed PDF page count verification failed')
+        for pl in placements:
+            page_no=int(pl['page'])
+            if page_no<1 or page_no>src.page_count:
+                raise HTTPException(500,'Signature verification page is invalid')
+            sp=src[page_no-1]; op=out[page_no-1]; rr=_placement_rect(sp,pl)
+            a=sp.get_pixmap(matrix=fitz.Matrix(1.5,1.5),clip=rr,alpha=False)
+            b=op.get_pixmap(matrix=fitz.Matrix(1.5,1.5),clip=rr,alpha=False)
+            if a.width!=b.width or a.height!=b.height or a.n!=b.n:
+                continue
+            sa=a.samples; sb=b.samples
+            if len(sa)==0 or len(sb)==0:
+                raise HTTPException(500,'Signature visual verification produced an empty region')
+            changed=sum(1 for x,y in zip(sa,sb) if x!=y)
+            threshold=max(24,int(len(sa)*0.002))
+            if changed < threshold:
+                raise HTTPException(500,f'Signature visual verification failed on page {page_no}')
+    finally:
+        src.close(); out.close()
+
+
 def render_pdf_page(path: Path, page_no: int, zoom: float=1.5, placements: list[dict]|None=None, signature_paths: dict[int,Path]|None=None) -> bytes:
     doc=fitz.open(path)
     try:
@@ -240,12 +279,7 @@ def render_pdf_page(path: Path, page_no: int, zoom: float=1.5, placements: list[
                 if int(pl['page'])!=page_no: continue
                 sigp=(signature_paths or {}).get(int(pl['signature_id']))
                 if not sigp or not sigp.is_file(): continue
-                dr=page.rect
-                x=float(pl['nx'])*dr.width; y=float(pl['ny'])*dr.height
-                w=float(pl['nw'])*dr.width; h=float(pl['nh'])*dr.height
-                rr=fitz.Rect(x,y,x+w,y+h)
-                # User coordinates are based on the displayed (rotated) page. Convert to unrotated page coordinates for insertion.
-                if page.rotation: rr=rr * page.derotation_matrix
+                rr=_placement_rect(page,pl)
                 page.insert_image(rr,filename=str(sigp),keep_proportion=True,overlay=True)
         pix=page.get_pixmap(matrix=fitz.Matrix(zoom,zoom),alpha=False)
         return pix.tobytes('png')
@@ -272,22 +306,15 @@ def sign_pdf(original: Path, output: Path, placements: list[dict], signature_pat
             if page_no<1 or page_no>doc.page_count: raise HTTPException(400,f'Invalid signature page {page_no}')
             sigp=signature_paths.get(int(pl['signature_id']))
             if not sigp or not sigp.is_file(): raise HTTPException(400,'Signature image is missing')
-            page=doc[page_no-1]; dr=page.rect
-            rr=fitz.Rect(float(pl['nx'])*dr.width,float(pl['ny'])*dr.height,(float(pl['nx'])+float(pl['nw']))*dr.width,(float(pl['ny'])+float(pl['nh']))*dr.height)
-            if page.rotation: rr=rr * page.derotation_matrix
+            page=doc[page_no-1]
+            rr=_placement_rect(page,pl)
             page.insert_image(rr,filename=str(sigp),keep_proportion=True,overlay=True)
         output.parent.mkdir(parents=True,exist_ok=True)
         tmp=output.with_suffix('.tmp.pdf')
         doc.save(tmp,garbage=4,deflate=True)
         tmp.replace(output)
     finally: doc.close()
-    # Verification: re-open, same page count, non-zero, checksum.
+    # Verification: file integrity + page count + visible change inside every signature box.
     if not output.is_file() or output.stat().st_size<100: raise HTTPException(500,'Signed PDF output is invalid')
-    chk=fitz.open(output)
-    try:
-        src=fitz.open(original)
-        try:
-            if chk.page_count!=src.page_count: raise HTTPException(500,'Signed PDF page count verification failed')
-        finally: src.close()
-    finally: chk.close()
+    verify_signature_regions(original,output,placements)
     return {'checksum':sha256_file(output),'size':output.stat().st_size}

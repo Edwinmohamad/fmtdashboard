@@ -1,21 +1,45 @@
-# FMT Operations Dashboard — Site TBS
+# FMT Operations Dashboard
 
-Version **2.4.0**.
+**Division:** FMT  
+**Site:** TBS  
+**Version:** 3.2.0
 
-## Default CasaOS access
+Facility Management operations, attendance PDF signing, inventory, change management, reports and audit trail.
 
-- Container port: `8096`
-- Installer prefers host port `8096` and searches upward if occupied.
-- Default bootstrap login requested for this deployment: `admin / admin`.
+## UI direction
+Version 3.2 uses a restrained Apple-inspired design system: native system typography, neutral surfaces, subtle translucency, thin borders, consistent spacing, a single blue accent and carefully limited animation. No external font files are required.
 
-## Attendance upload
+## Local / server start
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
 
-The upload page supports multiple PDFs, drag & drop, selected-file preview, 50 MB per-file validation in the CasaOS deployment, progress feedback, and structured upload errors. Successful upload opens the relevant Signing Workspace batch automatically.
+Default internal application port: `8096`.
 
-## Delete controls
+## GitHub workflow
+Recommended source-of-truth workflow:
+```bash
+# on CasaOS
+cd /DATA/AppData/fmt_dashboard/app
+git pull --rebase origin main
+docker compose up -d --build
+```
 
-Permanent delete is permission-gated and available where operationally appropriate: Attendance, Asset FMT, Tools Inventory, Consumables, unused Signatures, and tickets. Audit-sensitive records are protected. User accounts should normally be disabled rather than deleted.
+## Important runtime data
+Do not commit these to GitHub:
+- `.env`
+- `data/`
+- `uploads/`
+- `backups/`
+- runtime logs
 
-## Security note
+Keep `.env.example` committed.
 
-Change the default admin password before exposing this service outside the trusted LAN.
+## Signing workflow
+Upload PDF → select authorized signature → drag/resize → optionally remember position → Final Preview → Sign Selected → server verification → Signed → Finalize.
+
+A Signed document cannot be signed again directly. To intentionally re-sign, upload a fresh PDF revision from the document detail page; the old Signed version remains in history.
+
+## Security
+The development bootstrap can use `admin/admin` on a trusted LAN, but change this before exposing the service through a public domain or tunnel.
