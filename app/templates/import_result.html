@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block content %}
+<div class="page-head"><div><span class="eyebrow">{{t('imp.done_eyebrow')}}</span><h1>{{t('imp.done_title',title=title)}}</h1><p>{{t('imp.done_sub')}}</p></div><a class="btn primary" href="{{back_url}}">{{t('imp.back_to',title=title)}}</a></div>
+<div class="cards four"><div class="metric"><span>{{t('imp.total_rows')}}</span><b>{{result.total}}</b></div><div class="metric"><span>{{t('imp.created')}}</span><b>{{result.created}}</b></div><div class="metric"><span>{{t('imp.updated')}}</span><b>{{result.updated}}</b></div><div class="metric {% if result.failed %}warn{% endif %}"><span>{{t('imp.failed')}}</span><b>{{result.failed}}</b></div></div>
+<div class="panel"><div class="kv"><span>{{t('imp.skipped')}}</span><b>{{result.skipped}}</b><span>{{t('imp.failed')}}</span><b>{{result.failed}}</b></div>{% if result.errors %}<hr><h2>{{t('imp.errors')}}</h2>{% for e in result.errors %}<div class="list-row"><span>{{t('imp.row',n=e.row)}}</span><b>{{e.error}}</b></div>{% endfor %}{% else %}<div class="alert success">{{t('imp.no_errors')}}</div>{% endif %}</div>
+{% endblock %}

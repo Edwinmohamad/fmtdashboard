@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block content %}
+<div class="page-head"><div><span class="eyebrow">{{t('imp.eyebrow')}}</span><h1>{{t('imp.title',title=title)}}</h1><p>{{t('imp.sub')}}</p></div></div>
+<div class="cards three"><div class="metric"><span>{{t('imp.rows_detected')}}</span><b>{{preview.total_rows}}</b></div><div class="metric"><span>{{t('imp.cols_detected')}}</span><b>{{preview.headers|length}}</b></div><div class="metric"><span>{{t('imp.status')}}</span><b>{{t('imp.not_committed')}}</b></div></div>
+<form class="panel stack" method="post" action="/imports/{{token}}/commit">
+<h2>{{t('imp.mapping')}}</h2><p class="muted">{{t('imp.mapping_hint')}}</p>
+<div class="form-grid">
+{% for f in fields %}<label>{{f|replace('_',' ')|title}}{% if loop.index <= 2 %} *{% endif %}<select name="map_{{f}}" {% if loop.index <= 2 %}required{% endif %}><option value="">{{t('imp.ignore')}}</option>{% for h in preview.headers %}{% if h %}<option value="{{h}}" {% if (h|lower|replace(' ','_')) == f %}selected{% endif %}>{{h}}</option>{% endif %}{% endfor %}</select></label>{% endfor %}
+</div>
+<div class="form-actions"><button type="button" class="btn" onclick="history.back()">{{t('common.cancel')}}</button><button class="btn primary" data-confirm="{{t('imp.confirm')}}">{{t('imp.validate')}}</button></div>
+</form>
+<div class="panel table-wrap"><div class="panel-head"><h2>{{t('imp.data_preview')}}</h2><span class="muted">{{t('imp.first_rows',n=preview.sample|length)}}</span></div><table><thead><tr>{% for h in preview.headers %}<th>{{h or t('imp.unnamed')}}</th>{% endfor %}</tr></thead><tbody>{% for row in preview.sample %}<tr>{% for cell in row %}<td>{{cell}}</td>{% endfor %}</tr>{% else %}<tr><td><div class="empty">{{t('imp.no_rows')}}</div></td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}

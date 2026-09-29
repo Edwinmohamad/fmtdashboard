@@ -1,0 +1,9 @@
+{% macro render(pgmeta, base_url) %}
+{% if pgmeta and pgmeta.pages and pgmeta.pages > 1 %}
+<div class="pagination">
+  <a class="btn small {% if pgmeta.page<=1 %}disabled{% endif %}" href="{{base_url}}&pg={{pgmeta.page-1}}">← {{t('common.prev')}}</a>
+  <span class="muted">{{t('common.page_info',page=pgmeta.page,pages=pgmeta.pages,total=pgmeta.total)}}</span>
+  <a class="btn small {% if pgmeta.page>=pgmeta.pages %}disabled{% endif %}" href="{{base_url}}&pg={{pgmeta.page+1}}">{{t('common.next')}} →</a>
+</div>
+{% endif %}
+{% endmacro %}
