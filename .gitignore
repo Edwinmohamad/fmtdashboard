@@ -1,25 +1,39 @@
-
-# === FMT CasaOS production exclusions ===
+# Secrets
 .env
-.env.*
+.env.local
+.env.production
+.env.development
+.env.staging
+
+# Keep example config in repository
 !.env.example
+
+# Runtime data
 data/
 uploads/
 backups/
 logs/
+
+# Databases
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
 *.sqlite3
+
+# Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# IDE / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Temporary
 *.tmp
 *.temp
 *.log
