@@ -2,7 +2,7 @@
 
 **Facility Management Division — Site TBS**
 
-Version **3.4.0**
+Version **3.5.0**
 
 ## Flexible signature workflow
 The signing workspace supports multiple signature boxes per page, drag/resize, add/remove, exact preview, and master-page synchronization.
@@ -28,3 +28,7 @@ node --check app/static/app.js
 ```bash
 docker compose up -d --build
 ```
+
+
+## Signing workspace v3.5
+The attendance signing workspace supports visual target-page selection, editable copied placements, auto-save, page completion indicators, next-unsigned navigation, keyboard shortcuts, undo/redo, and exact final preview. Copied target pages remain independent so operators can fine-tune placement per page.

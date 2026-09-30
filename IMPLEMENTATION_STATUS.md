@@ -1,3 +1,7 @@
+# Implementation Status — v3.5.0
+
+Attendance signing workspace now uses editable copy-to-page behavior instead of hard locks. Visual page boxes, auto-save state, unsigned-page navigation, completion status, keyboard shortcuts, undo/redo, add/remove/duplicate, drag/resize, exact preview and final signing are implemented. Legacy v3.4 lock rows are detached automatically on edit/copy for upgrade compatibility.
+
 # FMT Operations Dashboard — Implementation Status
 
 Current version: **3.4.0**

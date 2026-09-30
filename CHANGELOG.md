@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.5.0 — Flexible Page Apply Workspace
+- Replaced hard page locking with editable copied placements.
+- Added visual page-number target selector; no manual page-range typing required.
+- Added permanent page navigator with signed/current/unsigned states.
+- Added document completion progress and first/next unsigned navigation.
+- Added debounced auto-save with visible Saving/Saved/Error state.
+- Added keyboard shortcuts for page navigation, add, delete, save, undo and redo.
+- Added undo/redo for placement changes.
+- Added page-level status and copied-from indication during the active session.
+- Added final-preview warning listing pages with no signature.
+- Kept add, duplicate, remove, drag, resize and multiple signatures per page.
+- Legacy v3.4 hard locks are automatically detached when a page is edited or copied.
+- Tightened signing workspace typography, line heights, control heights and responsive layout to prevent clipped text.
+
 ## 3.4.0 — Master Signature Lock + Flexible Add/Remove
 
 ### Signature workspace

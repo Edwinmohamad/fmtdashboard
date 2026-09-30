@@ -339,9 +339,9 @@ def signing_page_placements(request:Request,payload:dict=Body(...)):
     if not v: raise HTTPException(404,'Document version not found')
     info=pdf_info(BASE/v['file_path'])
     if page_no<1 or page_no>info['page_count']: raise HTTPException(400,'Page does not exist')
-    page_lock=_page_lock_for(aid,page_no)
-    if page_lock:
-        raise HTTPException(409,f"Page {page_no} is locked to master page {page_lock['source_page']}. Unlock it before editing.")
+    # v3.5: page targets are always editable. Remove any legacy v3.4 hard-lock
+    # when the user edits a page so older data upgrades without manual cleanup.
+    execute('DELETE FROM signature_page_locks WHERE attendance_id=? AND target_page=?',(aid,page_no))
     clean=[]; seen=set()
     for idx,b in enumerate(boxes,1):
         sid=int(b.get('signature_id')); slot=max(1,int(b.get('placement_slot') or idx))
@@ -367,16 +367,13 @@ def signing_page_placements(request:Request,payload:dict=Body(...)):
         if not same:
             mismatched.append(x); continue
         with connect() as con:
-            # Locked target pages are read-only. A master/source page remains editable
-            # and every Save automatically mirrors its complete box layout to targets.
-            locked=con.execute('SELECT source_page FROM signature_page_locks WHERE attendance_id=? AND target_page=?',(x,page_no)).fetchone()
-            if locked:
-                mismatched.append(x); continue
+            # v3.5 uses editable copied placements, not hard locks.
+            con.execute('DELETE FROM signature_page_locks WHERE attendance_id=? AND target_page=?',(x,page_no))
             con.execute('DELETE FROM attendance_signature_placements WHERE attendance_id=? AND page=?',(x,page_no))
             for pl in clean:
                 con.execute('INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,placement_slot,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
                             (x,pl['signature_id'],page_no,pl['placement_slot'],pl['nx'],pl['ny'],pl['nw'],pl['nh'],u['id'],ts))
-            synced,lock_skipped=_sync_locked_pages(con,x,page_no,clean,bi,u['id'],ts)
+            synced,lock_skipped=[],[]
             con.commit()
         applied.append(x)
         if x==aid:
@@ -398,8 +395,8 @@ def signing_copy_page(request:Request,payload:dict=Body(...)):
     v=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
     info=pdf_info(BASE/v['file_path'])
     if source_page<1 or source_page>info['page_count']: raise HTTPException(400,'Source page does not exist')
-    source_lock=_page_lock_for(aid,source_page)
-    if source_lock: raise HTTPException(409,f"Page {source_page} is locked to master page {source_lock['source_page']}. Unlock it before using it as a source.")
+    # Legacy hard-locks from v3.4 are detached automatically in v3.5.
+    execute('DELETE FROM signature_page_locks WHERE attendance_id=? AND target_page=?',(aid,source_page))
     src=[dict(r) for r in q('SELECT * FROM attendance_signature_placements WHERE attendance_id=? AND page=? ORDER BY id',(aid,source_page))]
     if not src: raise HTTPException(400,'Save at least one signature on the current page first')
     for pl in src:
@@ -409,8 +406,7 @@ def signing_copy_page(request:Request,payload:dict=Body(...)):
     for pn in targets:
         if pn==source_page or pn<1 or pn>info['page_count']:
             skipped.append(pn); continue
-        if _page_lock_for(aid,pn):
-            skipped.append(pn); continue
+        execute('DELETE FROM signature_page_locks WHERE attendance_id=? AND target_page=?',(aid,pn))
         dp=info['pages'][pn-1]
         if abs(dp['width']-sp['width'])>=1 or abs(dp['height']-sp['height'])>=1 or int(dp.get('rotation',0))!=int(sp.get('rotation',0)):
             skipped.append(pn); continue
