@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 ROOT="/DATA/AppData/fmt_dashboard"; APP="$ROOT/app"; BACKUPS="$ROOT/backups"; TMP="$ROOT/.install_tmp"; TS="$(date +%Y%m%d-%H%M%S)"
-CONTAINER="fmt-tbs-dashboard"; DEFAULT_PORT=8096; MAX_PORT=8115; EXPECTED="3.2.0"
+CONTAINER="fmt-tbs-dashboard"; DEFAULT_PORT=8096; MAX_PORT=8115; EXPECTED="3.4.0"
 log(){ printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 fail(){ echo; echo "ERROR: $*" >&2; exit 1; }
 trap 'rc=$?; if [ $rc -ne 0 ]; then echo; echo "Installer stopped with code $rc" >&2; docker logs --tail 160 "$CONTAINER" 2>/dev/null || true; fi' EXIT
@@ -12,14 +12,14 @@ command -v unzip >/dev/null || { apt-get update -y >/dev/null; apt-get install -
 command -v curl >/dev/null || { apt-get update -y >/dev/null; apt-get install -y curl >/dev/null; }
 mkdir -p "$ROOT" "$BACKUPS"
 ZIP="${1:-}"
-if [ -z "$ZIP" ]; then ZIP="$(find "$ROOT" -maxdepth 2 -type f \( -iname '*fmt*3.2*.zip' -o -iname '*fmt*dashboard*.zip' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)"; fi
-[ -n "$ZIP" ] && [ -f "$ZIP" ] || fail "FMT 3.2 package was not found under $ROOT."
+if [ -z "$ZIP" ]; then ZIP="$(find "$ROOT" -maxdepth 2 -type f \( -iname '*fmt*3.4*.zip' -o -iname '*fmt*dashboard*.zip' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)"; fi
+[ -n "$ZIP" ] && [ -f "$ZIP" ] || fail "FMT 3.4 package was not found under $ROOT."
 unzip -tq "$ZIP" >/dev/null || fail "ZIP validation failed: $ZIP"
 rm -rf "$TMP"; mkdir -p "$TMP/extract"; unzip -q "$ZIP" -d "$TMP/extract"; SRC="$TMP/extract"
 if [ "$(find "$SRC" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 1 ]; then ONE="$(find "$SRC" -mindepth 1 -maxdepth 1 | head -1)"; [ -d "$ONE" ] && [ -f "$ONE/docker-compose.yml" ] && SRC="$ONE"; fi
 [ -f "$SRC/app/main.py" ] && [ -f "$SRC/docker-compose.yml" ] || fail "Application source is incomplete."
 VER="$(tr -d '\r\n ' < "$SRC/VERSION" 2>/dev/null || true)"; [ "$VER" = "$EXPECTED" ] || fail "Expected VERSION $EXPECTED, found '${VER:-missing}'."
-grep -q 'app.css?v=3.2.0' "$SRC/app/templates/base.html" || fail "3.2 UI assets are missing."
+grep -q 'app.css?v=3.4.0' "$SRC/app/templates/base.html" || fail "3.4 UI assets are missing."
 log "Using package: $ZIP (VERSION $VER)"
 if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
 NEW="$ROOT/app.new-$TS"; cp -a "$SRC" "$NEW"; mkdir -p "$NEW/data" "$NEW/uploads"

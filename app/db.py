@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS attendance_signature_placements (
  attendance_id INTEGER NOT NULL,
  signature_id INTEGER NOT NULL,
  page INTEGER NOT NULL,
+ placement_slot INTEGER NOT NULL DEFAULT 1,
  nx REAL NOT NULL,
  ny REAL NOT NULL,
  nw REAL NOT NULL,
@@ -142,8 +143,21 @@ CREATE TABLE IF NOT EXISTS attendance_signature_placements (
  FOREIGN KEY(attendance_id) REFERENCES attendance(id) ON DELETE CASCADE,
  FOREIGN KEY(signature_id) REFERENCES signatures(id) ON DELETE CASCADE,
  FOREIGN KEY(created_by) REFERENCES users(id),
- UNIQUE(attendance_id,signature_id,page)
+ UNIQUE(attendance_id,signature_id,page,placement_slot)
 );
+CREATE TABLE IF NOT EXISTS signature_page_locks (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ attendance_id INTEGER NOT NULL,
+ source_page INTEGER NOT NULL,
+ target_page INTEGER NOT NULL,
+ created_by INTEGER NOT NULL,
+ updated_at TEXT NOT NULL,
+ FOREIGN KEY(attendance_id) REFERENCES attendance(id) ON DELETE CASCADE,
+ FOREIGN KEY(created_by) REFERENCES users(id),
+ UNIQUE(attendance_id,target_page)
+);
+CREATE INDEX IF NOT EXISTS idx_signature_page_locks_source ON signature_page_locks(attendance_id,source_page);
+
 CREATE TABLE IF NOT EXISTS attendance_sign_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  attendance_id INTEGER NOT NULL,
@@ -167,6 +181,7 @@ CREATE TABLE IF NOT EXISTS signature_position_templates (
  page_rotation INTEGER NOT NULL DEFAULT 0,
  layout_fingerprint TEXT,
  page INTEGER NOT NULL,
+ placement_slot INTEGER NOT NULL DEFAULT 1,
  nx REAL NOT NULL,
  ny REAL NOT NULL,
  nw REAL NOT NULL,
@@ -176,7 +191,7 @@ CREATE TABLE IF NOT EXISTS signature_position_templates (
  updated_at TEXT NOT NULL,
  FOREIGN KEY(signature_id) REFERENCES signatures(id) ON DELETE CASCADE,
  FOREIGN KEY(created_by) REFERENCES users(id),
- UNIQUE(signature_id,page_count,page_width,page_height,page)
+ UNIQUE(signature_id,page_count,page_width,page_height,page,placement_slot)
 );
 CREATE TABLE IF NOT EXISTS assets (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -302,6 +317,37 @@ def _add_column_if_missing(con, table: str, column: str, ddl: str):
         con.execute(f'ALTER TABLE {table} ADD COLUMN {column} {ddl}')
 
 
+
+def _migrate_signature_placement_slots(con):
+    """Upgrade legacy placement/template tables so one signature can appear multiple times on one page."""
+    cols={r['name'] for r in con.execute('PRAGMA table_info(attendance_signature_placements)').fetchall()}
+    if cols and 'placement_slot' not in cols:
+        con.execute('ALTER TABLE attendance_signature_placements RENAME TO attendance_signature_placements_legacy')
+        con.executescript("""
+        CREATE TABLE attendance_signature_placements (
+         id INTEGER PRIMARY KEY AUTOINCREMENT, attendance_id INTEGER NOT NULL, signature_id INTEGER NOT NULL, page INTEGER NOT NULL,
+         placement_slot INTEGER NOT NULL DEFAULT 1, nx REAL NOT NULL, ny REAL NOT NULL, nw REAL NOT NULL, nh REAL NOT NULL, created_by INTEGER NOT NULL, updated_at TEXT NOT NULL,
+         FOREIGN KEY(attendance_id) REFERENCES attendance(id) ON DELETE CASCADE, FOREIGN KEY(signature_id) REFERENCES signatures(id) ON DELETE CASCADE, FOREIGN KEY(created_by) REFERENCES users(id),
+         UNIQUE(attendance_id,signature_id,page,placement_slot));
+        INSERT INTO attendance_signature_placements(id,attendance_id,signature_id,page,placement_slot,nx,ny,nw,nh,created_by,updated_at)
+        SELECT id,attendance_id,signature_id,page,1,nx,ny,nw,nh,created_by,updated_at FROM attendance_signature_placements_legacy;
+        DROP TABLE attendance_signature_placements_legacy;
+        """)
+    cols={r['name'] for r in con.execute('PRAGMA table_info(signature_position_templates)').fetchall()}
+    if cols and 'placement_slot' not in cols:
+        con.execute('ALTER TABLE signature_position_templates RENAME TO signature_position_templates_legacy')
+        con.executescript("""
+        CREATE TABLE signature_position_templates (
+         id INTEGER PRIMARY KEY AUTOINCREMENT, signature_id INTEGER NOT NULL, page_count INTEGER NOT NULL, page_width REAL NOT NULL, page_height REAL NOT NULL,
+         page_rotation INTEGER NOT NULL DEFAULT 0, layout_fingerprint TEXT, page INTEGER NOT NULL, placement_slot INTEGER NOT NULL DEFAULT 1,
+         nx REAL NOT NULL, ny REAL NOT NULL, nw REAL NOT NULL, nh REAL NOT NULL, label TEXT, created_by INTEGER NOT NULL, updated_at TEXT NOT NULL,
+         FOREIGN KEY(signature_id) REFERENCES signatures(id) ON DELETE CASCADE, FOREIGN KEY(created_by) REFERENCES users(id),
+         UNIQUE(signature_id,page_count,page_width,page_height,page,placement_slot));
+        INSERT INTO signature_position_templates(id,signature_id,page_count,page_width,page_height,page_rotation,layout_fingerprint,page,placement_slot,nx,ny,nw,nh,label,created_by,updated_at)
+        SELECT id,signature_id,page_count,page_width,page_height,COALESCE(page_rotation,0),layout_fingerprint,page,1,nx,ny,nw,nh,label,created_by,updated_at FROM signature_position_templates_legacy;
+        DROP TABLE signature_position_templates_legacy;
+        """)
+
 def init_db():
     with connect() as con:
         con.executescript(SCHEMA)
@@ -317,6 +363,7 @@ def init_db():
         ]:
             _add_column_if_missing(con,'attendance',name,ddl)
         _add_column_if_missing(con,'attendance_versions','checksum','TEXT')
+        _migrate_signature_placement_slots(con)
         _add_column_if_missing(con,'signature_position_templates','page_rotation','INTEGER NOT NULL DEFAULT 0')
         _add_column_if_missing(con,'signature_position_templates','layout_fingerprint','TEXT')
         # Indexes MUST be created only after all legacy-column migrations above.

@@ -94,3 +94,89 @@ label{display:grid;gap:6px;color:var(--text-2);font-size:10.5px;font-weight:550}
 @media(max-width:720px){.inventory-stats{grid-template-columns:1fr 1fr}.row{flex-direction:column;align-items:stretch}.kv{grid-template-columns:90px 1fr}.pdf-frame{height:62vh}}
 /* Modifier classes kept intentionally lightweight */
 .kpi-card.accent{border-color:color-mix(in srgb,var(--accent) 24%,var(--line));background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 4%,var(--surface)),var(--surface))}.ready{color:var(--accent)}.overdue{color:var(--orange)}.doc-check{accent-color:var(--accent)}.row-arrow{margin-left:auto;color:var(--muted)}.sticky-actions{position:sticky;bottom:12px;z-index:6}.sidebar-toggle{flex:0 0 auto}.sign-main{font-weight:650}.final-step{background:color-mix(in srgb,var(--accent) 5%,var(--surface-2))}.login-card{border-radius:var(--r-xl)}.login-logo{object-fit:contain}
+
+/* ============================================================
+   v3.3 — Flexible Signature Workspace / Apple UI refinement
+   ============================================================ */
+.sign-workspace{grid-template-columns:250px minmax(560px,1fr) 300px;gap:14px}
+.doc-queue,.sign-stage,.sign-controls{min-height:0}
+.sign-stage{overflow:visible}
+.sticky-sign-toolbar{position:sticky;top:62px;z-index:18;background:color-mix(in srgb,var(--surface-solid) 88%,transparent);backdrop-filter:saturate(160%) blur(18px);-webkit-backdrop-filter:saturate(160%) blur(18px);border-radius:var(--r-lg) var(--r-lg) 0 0}
+.signing-nav{flex-wrap:wrap;justify-content:flex-end}
+.page-jump,.zoom-control{display:flex;align-items:center;gap:5px;height:34px;padding:3px 6px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+.page-jump input{width:43px;height:26px;padding:0 5px;text-align:center;border:0!important;background:transparent!important;font-size:11px;box-shadow:none!important}
+.page-jump span,.zoom-control span{font-size:9px;color:var(--muted);white-space:nowrap}
+.zoom-control .btn{width:27px;height:26px;min-height:0;padding:0;border:0;background:transparent}
+#zoomLabel{min-width:30px;text-align:center;cursor:pointer;font-weight:650;color:var(--text)}
+.compact-viewer{display:block;min-height:0;padding:12px;background:#d9d9de;overflow:hidden}
+.pdf-viewport{height:clamp(430px,62vh,680px);overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:12px;scrollbar-gutter:stable both-edges}
+.pdf-page-wrap{flex:0 0 auto;width:min(100%,720px);max-width:none;overflow:visible;transition:width .16s cubic-bezier(.2,.8,.2,1)}
+.pdf-page-wrap>img{display:block;width:100%;height:auto;max-width:none;border-radius:5px}
+.signature-layer{position:absolute;inset:0;pointer-events:none;z-index:3}
+.signature-box{pointer-events:auto;position:absolute;min-width:42px;min-height:24px;border:1.5px solid var(--accent);border-radius:8px;background:rgba(0,113,227,.035);box-shadow:0 0 0 1px rgba(255,255,255,.85),0 8px 22px rgba(0,113,227,.14);touch-action:none;cursor:move;overflow:visible}
+.signature-box>img{display:block;width:100%;height:100%;object-fit:contain;pointer-events:none;border-radius:6px}
+.signature-box-toolbar{position:absolute;left:-2px;bottom:calc(100% + 6px);height:27px;display:flex;align-items:center;gap:2px;padding:2px 3px;border:1px solid color-mix(in srgb,var(--line) 80%,transparent);border-radius:9px;background:rgba(29,29,31,.9);color:#fff;box-shadow:0 6px 18px rgba(0,0,0,.18);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);white-space:nowrap;opacity:.94;transition:opacity .14s ease,transform .14s ease}
+.signature-box:hover .signature-box-toolbar,.signature-box:focus-within .signature-box-toolbar{opacity:1;transform:translateY(-1px)}
+.sig-grip{display:grid;place-items:center;width:18px;height:21px;color:#b7b7bb;font-size:10px;cursor:move;letter-spacing:-2px}
+.sig-box-label{max-width:100px;overflow:hidden;text-overflow:ellipsis;font-size:8px;font-weight:650;color:#f5f5f7;padding:0 4px}
+.signature-box-toolbar button{display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:6px;background:transparent;color:#fff;font-size:14px;line-height:1;cursor:pointer}
+.signature-box-toolbar button:hover{background:rgba(255,255,255,.14)}
+.signature-box-toolbar button[data-act="delete"]:hover{background:#ff453a;color:#fff}
+.signature-box .resize-handle{right:-6px;bottom:-6px;width:13px;height:13px;z-index:4}
+.signature-box.pulse-focus{animation:sigFocus .6s ease}
+@keyframes sigFocus{0%{box-shadow:0 0 0 1px rgba(255,255,255,.85),0 0 0 0 rgba(0,113,227,.45)}45%{box-shadow:0 0 0 1px rgba(255,255,255,.85),0 0 0 8px rgba(0,113,227,.12)}100%{box-shadow:0 0 0 1px rgba(255,255,255,.85),0 8px 22px rgba(0,113,227,.14)}}
+.flexible-control-flow{gap:9px}
+.flexible-control-flow .control-step{padding:12px}
+.action-row{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px}
+.action-row .btn{flex:1;min-width:105px}
+.field-label{display:block;margin:8px 0 5px;font-size:9px;font-weight:650;color:var(--muted)}
+.copy-pages-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px}.copy-pages-row input{min-width:0}.field-help{display:block;margin-top:5px;color:var(--muted);font-size:8.5px;line-height:1.35}
+#saveCurrentPage{margin-top:8px}
+.viewer-foot{background:var(--surface);border-radius:0 0 var(--r-lg) var(--r-lg)}
+
+/* More generous, Apple-like text hierarchy in operational pages */
+.signing-page-head h1{letter-spacing:-.04em}.signing-page-head p{max-width:720px}.control-header p,.queue-head p{font-size:11px;line-height:1.4}.step-content>b{font-size:11.5px}.step-content>p{font-size:10px;line-height:1.45}.control-note{font-size:9.5px;line-height:1.45}
+
+@media(max-width:1380px){
+  .sign-workspace{grid-template-columns:230px minmax(500px,1fr)}
+  .sign-controls{grid-column:1/-1}
+  .flexible-control-flow{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .pdf-viewport{height:clamp(420px,58vh,620px)}
+}
+@media(max-width:980px){
+  .sign-workspace{grid-template-columns:1fr}
+  .doc-queue,.sign-controls{grid-column:auto}
+  .queue-list{max-height:260px}
+  .flexible-control-flow{grid-template-columns:1fr 1fr}
+  .sticky-sign-toolbar{top:58px}
+  .pdf-viewport{height:58vh;min-height:390px}
+}
+@media(max-width:720px){
+  .flexible-control-flow{grid-template-columns:1fr}
+  .sign-toolbar{align-items:flex-start;gap:10px;flex-direction:column}
+  .signing-nav{width:100%;justify-content:space-between}
+  .page-jump{order:2}.zoom-control{order:3}
+  .pdf-viewport{height:54vh;padding:8px}
+  .compact-viewer{padding:7px}
+  .signature-box-toolbar{bottom:calc(100% + 4px);max-width:180px}
+  .sig-box-label{max-width:74px}
+}
+/* Keep floating signature controls visible even when a box is near the page top. */
+.pdf-viewport{padding:44px 12px 24px}
+@media(max-width:720px){.pdf-viewport{padding:40px 8px 18px}}
+
+/* v3.4 — master signature page locks: Apple-style, compact, explicit state */
+.lock-status-card{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;gap:9px;margin-top:8px;padding:9px 10px;border:1px solid var(--line);border-radius:12px;background:var(--surface-solid);transition:border-color .16s ease,background .16s ease,box-shadow .16s ease}
+.lock-status-card .lock-status-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px color-mix(in srgb,var(--green) 12%,transparent)}
+.lock-status-card b,.lock-status-card small{display:block}.lock-status-card b{font-size:9.5px;line-height:1.3}.lock-status-card small{margin-top:2px;color:var(--muted);font-size:8.5px;line-height:1.35}
+.lock-status-card.is-master{border-color:color-mix(in srgb,var(--accent) 24%,var(--line));background:var(--accent-soft)}
+.lock-status-card.is-master .lock-status-dot{background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 12%,transparent)}
+.lock-status-card.is-locked{border-color:color-mix(in srgb,#ff9f0a 28%,var(--line));background:color-mix(in srgb,#ff9f0a 7%,var(--surface-solid))}
+.lock-status-card.is-locked .lock-status-dot{background:#ff9f0a;box-shadow:0 0 0 4px color-mix(in srgb,#ff9f0a 12%,transparent)}
+.copy-once-details{margin-top:8px;border-top:1px solid var(--line);padding-top:7px}.copy-once-details summary{cursor:pointer;color:var(--muted);font-size:8.8px;font-weight:650;list-style:none}.copy-once-details summary::-webkit-details-marker{display:none}.copy-once-details summary::before{content:'›';display:inline-block;margin-right:5px;transition:transform .14s ease}.copy-once-details[open] summary::before{transform:rotate(90deg)}.copy-once-body{display:grid;gap:7px;margin-top:8px}
+.signature-box.locked-signature-box{cursor:default;border-style:dashed;border-color:#ff9f0a;background:rgba(255,159,10,.04);box-shadow:0 0 0 1px rgba(255,255,255,.82),0 7px 20px rgba(255,159,10,.12)}
+.signature-box .locked-toolbar{background:rgba(70,70,74,.92);cursor:default}.signature-box .locked-toolbar span:first-child{font-size:10px}.signature-box.locked-signature-box:hover .signature-box-toolbar{transform:none}
+.master-lock-step .step-content>p{line-height:1.4}.master-lock-step .btn.primary{white-space:nowrap}
+@media(max-width:1450px){.sign-workspace{grid-template-columns:248px minmax(440px,1fr) 295px}.pdf-canvas-shell{min-height:470px;padding:14px}.queue-list{max-height:520px}}
+@media(max-width:1180px){.sign-workspace{grid-template-columns:230px minmax(420px,1fr)}.sign-controls{grid-column:1/-1;min-height:0}.control-flow{grid-template-columns:repeat(2,minmax(0,1fr))}.control-note{grid-column:1/-1}}
+@media(max-width:760px){.lock-status-card{grid-template-columns:8px 1fr}.lock-status-card .btn{grid-column:1/-1;width:100%}.copy-pages-row{grid-template-columns:1fr}.control-flow{grid-template-columns:1fr}.pdf-canvas-shell{min-height:390px;padding:10px}}

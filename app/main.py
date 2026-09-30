@@ -12,7 +12,7 @@ from .db import init_db, q, execute, now, audit, BASE, connect
 from .auth import bootstrap_admin, current_user, verify_password, create_session, delete_session, COOKIE, COOKIE_SECURE, SESSION_HOURS, can, hash_password
 from .services import (save_upload, save_image_upload, inventory_import_xlsx, preview_inventory_xlsx, export_inventory_xlsx,
     ALLOWED_IMAGE, ALLOWED_TICKET, TICKET_TRANSITIONS, ATTENDANCE_TRANSITIONS, allowed_attendance_transitions, allowed_ticket_transitions,
-    pdf_info, pdf_layout_fingerprint, render_pdf_page, sign_pdf, sha256_file, validate_image_file)
+    pdf_info, pdf_layout_fingerprint, render_pdf_page, sign_pdf, sha256_file, validate_image_file, validate_normalized_placement)
 
 app = FastAPI(title="FMT Operations Dashboard — Site TBS", docs_url=None, redoc_url=None)
 
@@ -100,6 +100,34 @@ def ensure_signable_attendance(a):
     if a['status'] not in ('Uploaded','Checking','Ready to Sign'):
         raise HTTPException(409,f"Document status {a['status']} is not signable")
     return a
+
+
+def _page_lock_for(attendance_id:int, page_no:int):
+    return q('SELECT * FROM signature_page_locks WHERE attendance_id=? AND target_page=?',(attendance_id,page_no),one=True)
+
+def _sync_locked_pages(con, attendance_id:int, source_page:int, placements:list[dict], info:dict, user_id:int, ts:str):
+    """Mirror a master/source page layout to every page locked to it.
+    Returns (synced_pages, skipped_pages). Target pages are read-only until unlocked.
+    """
+    locks=con.execute('SELECT target_page FROM signature_page_locks WHERE attendance_id=? AND source_page=? ORDER BY target_page',(attendance_id,source_page)).fetchall()
+    if not locks:
+        return [],[]
+    src=info['pages'][source_page-1]
+    synced=[]; skipped=[]
+    for row in locks:
+        pn=int(row['target_page'])
+        if pn<1 or pn>info['page_count']:
+            skipped.append(pn); continue
+        dst=info['pages'][pn-1]
+        same=abs(dst['width']-src['width'])<1 and abs(dst['height']-src['height'])<1 and int(dst.get('rotation',0))==int(src.get('rotation',0))
+        if not same:
+            skipped.append(pn); continue
+        con.execute('DELETE FROM attendance_signature_placements WHERE attendance_id=? AND page=?',(attendance_id,pn))
+        for pl in placements:
+            con.execute('INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,placement_slot,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                        (attendance_id,pl['signature_id'],pn,pl['placement_slot'],pl['nx'],pl['ny'],pl['nw'],pl['nh'],user_id,ts))
+        synced.append(pn)
+    return synced,skipped
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
@@ -223,7 +251,10 @@ def attendance_signing_workspace(request:Request,batch:str|None=None):
     placements=q("SELECT p.*,s.name signature_name,s.file_path FROM attendance_signature_placements p JOIN signatures s ON s.id=p.signature_id WHERE p.attendance_id IN (SELECT id FROM attendance WHERE status IN ('Uploaded','Checking','Ready to Sign')) ORDER BY p.id")
     plmap={}
     for r in placements: plmap.setdefault(r['attendance_id'],[]).append(dict(r))
-    return page(request,'attendance_signing.html',docs=docs,signatures=sigs,placements=plmap,batch=batch)
+    locks=q("SELECT * FROM signature_page_locks WHERE attendance_id IN (SELECT id FROM attendance WHERE status IN ('Uploaded','Checking','Ready to Sign')) ORDER BY attendance_id,source_page,target_page")
+    lockmap={}
+    for r in locks: lockmap.setdefault(r['attendance_id'],[]).append(dict(r))
+    return page(request,'attendance_signing.html',docs=docs,signatures=sigs,placements=plmap,locks=lockmap,batch=batch)
 
 @app.get('/attendance/{aid}/page/{page_no}.png')
 def attendance_page_png(request:Request,aid:int,page_no:int):
@@ -270,11 +301,12 @@ def signing_placement(request:Request,payload:dict=Body(...)):
     ainfo=pdf_info(BASE/av['file_path'])
     if page_no<1 or page_no>ainfo['page_count']: raise HTTPException(400,'Selected signature page does not exist')
     src_page=ainfo['pages'][page_no-1]; srcw=src_page['width']; srch=src_page['height']
-    execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,created_by=excluded.created_by,updated_at=excluded.updated_at",
-            (aid,sid,page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now()))
+    slot=max(1,int(payload.get('placement_slot',1)))
+    execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,placement_slot,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page,placement_slot) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,created_by=excluded.created_by,updated_at=excluded.updated_at",
+            (aid,sid,page_no,slot,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now()))
     if payload.get('remember'):
-        execute("INSERT INTO signature_position_templates(signature_id,page_count,page_width,page_height,page_rotation,layout_fingerprint,page,nx,ny,nw,nh,label,created_by,updated_at) VALUES(?,?,?,?,?,?,?, ?,?,?,?,'Saved position',?,?) ON CONFLICT(signature_id,page_count,page_width,page_height,page) DO UPDATE SET page_rotation=excluded.page_rotation,layout_fingerprint=excluded.layout_fingerprint,nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
-                (sid,ainfo['page_count'],round(srcw,2),round(srch,2),int(src_page.get('rotation',0)),pdf_layout_fingerprint(ainfo),page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now()))
+        execute("INSERT INTO signature_position_templates(signature_id,page_count,page_width,page_height,page_rotation,layout_fingerprint,page,placement_slot,nx,ny,nw,nh,label,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'Saved position',?,?) ON CONFLICT(signature_id,page_count,page_width,page_height,page,placement_slot) DO UPDATE SET page_rotation=excluded.page_rotation,layout_fingerprint=excluded.layout_fingerprint,nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
+                (sid,ainfo['page_count'],round(srcw,2),round(srch,2),int(src_page.get('rotation',0)),pdf_layout_fingerprint(ainfo),page_no,slot,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now()))
     # Apply only when the destination page itself has the same displayed dimensions.
     applied=[aid]; mismatched=[]
     for x in payload.get('apply_ids') or []:
@@ -290,10 +322,167 @@ def signing_placement(request:Request,payload:dict=Body(...)):
         dst_page=binfo['pages'][page_no-1] if page_no<=binfo['page_count'] else None
         same_layout=bool(dst_page and binfo['page_count']==ainfo['page_count'] and abs(dst_page['width']-srcw)<1 and abs(dst_page['height']-srch)<1 and int(dst_page.get('rotation',0))==int(src_page.get('rotation',0)) and pdf_layout_fingerprint(binfo)==pdf_layout_fingerprint(ainfo))
         if same_layout:
-            execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
-                    (x,sid,page_no,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now())); applied.append(x)
+            execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,placement_slot,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page,placement_slot) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
+                    (x,sid,page_no,slot,vals['nx'],vals['ny'],vals['nw'],vals['nh'],u['id'],now())); applied.append(x)
         else: mismatched.append(x)
     return {'ok':True,'applied':applied,'mismatched':mismatched}
+
+@app.post('/api/signing/page-placements')
+def signing_page_placements(request:Request,payload:dict=Body(...)):
+    """Atomically replace every signature box on one page and optionally mirror it to matching selected PDFs."""
+    u=require_action(request,'attendance.sign')
+    aid=int(payload.get('attendance_id')); page_no=int(payload.get('page',1)); boxes=payload.get('placements') or []
+    a=q('SELECT * FROM attendance WHERE id=?',(aid,),one=True)
+    if not a: raise HTTPException(404,'Document not found')
+    ensure_signable_attendance(a)
+    v=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
+    if not v: raise HTTPException(404,'Document version not found')
+    info=pdf_info(BASE/v['file_path'])
+    if page_no<1 or page_no>info['page_count']: raise HTTPException(400,'Page does not exist')
+    page_lock=_page_lock_for(aid,page_no)
+    if page_lock:
+        raise HTTPException(409,f"Page {page_no} is locked to master page {page_lock['source_page']}. Unlock it before editing.")
+    clean=[]; seen=set()
+    for idx,b in enumerate(boxes,1):
+        sid=int(b.get('signature_id')); slot=max(1,int(b.get('placement_slot') or idx))
+        if (sid,slot) in seen: raise HTTPException(400,'Duplicate signature slot on page')
+        seen.add((sid,slot)); sig=q('SELECT * FROM signatures WHERE id=? AND active=1',(sid,),one=True)
+        if not signature_allowed(sig,u): raise HTTPException(403,'You are not allowed to use one of the selected signatures')
+        pl={'signature_id':sid,'placement_slot':slot,'page':page_no,**{k:float(b.get(k,0)) for k in ('nx','ny','nw','nh')}}
+        validate_normalized_placement(pl); clean.append(pl)
+    targets=[aid]
+    for x in payload.get('apply_ids') or []:
+        x=int(x)
+        if x not in targets: targets.append(x)
+    src_page=info['pages'][page_no-1]; fp=pdf_layout_fingerprint(info); applied=[]; mismatched=[]; ts=now(); source_synced=[]; source_lock_skipped=[]
+    for x in targets:
+        b=q('SELECT * FROM attendance WHERE id=?',(x,),one=True)
+        if not b or b['status'] not in ('Uploaded','Checking','Ready to Sign'):
+            mismatched.append(x); continue
+        bv=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(x,),one=True)
+        try: bi=pdf_info(BASE/bv['file_path']) if bv else None
+        except Exception: bi=None
+        dp=bi['pages'][page_no-1] if bi and page_no<=bi['page_count'] else None
+        same=bool(dp and bi['page_count']==info['page_count'] and abs(dp['width']-src_page['width'])<1 and abs(dp['height']-src_page['height'])<1 and int(dp.get('rotation',0))==int(src_page.get('rotation',0)) and pdf_layout_fingerprint(bi)==fp)
+        if not same:
+            mismatched.append(x); continue
+        with connect() as con:
+            # Locked target pages are read-only. A master/source page remains editable
+            # and every Save automatically mirrors its complete box layout to targets.
+            locked=con.execute('SELECT source_page FROM signature_page_locks WHERE attendance_id=? AND target_page=?',(x,page_no)).fetchone()
+            if locked:
+                mismatched.append(x); continue
+            con.execute('DELETE FROM attendance_signature_placements WHERE attendance_id=? AND page=?',(x,page_no))
+            for pl in clean:
+                con.execute('INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,placement_slot,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                            (x,pl['signature_id'],page_no,pl['placement_slot'],pl['nx'],pl['ny'],pl['nw'],pl['nh'],u['id'],ts))
+            synced,lock_skipped=_sync_locked_pages(con,x,page_no,clean,bi,u['id'],ts)
+            con.commit()
+        applied.append(x)
+        if x==aid:
+            source_synced=synced; source_lock_skipped=lock_skipped
+    if payload.get('remember') and clean:
+        for pl in clean:
+            execute("INSERT INTO signature_position_templates(signature_id,page_count,page_width,page_height,page_rotation,layout_fingerprint,page,placement_slot,nx,ny,nw,nh,label,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'Saved position',?,?) ON CONFLICT(signature_id,page_count,page_width,page_height,page,placement_slot) DO UPDATE SET page_rotation=excluded.page_rotation,layout_fingerprint=excluded.layout_fingerprint,nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,updated_at=excluded.updated_at",
+                    (pl['signature_id'],info['page_count'],round(src_page['width'],2),round(src_page['height'],2),int(src_page.get('rotation',0)),fp,page_no,pl['placement_slot'],pl['nx'],pl['ny'],pl['nw'],pl['nh'],u['id'],ts))
+    return {'ok':True,'applied':applied,'mismatched':mismatched,'placements':clean,'synced_pages':source_synced,'lock_skipped':source_lock_skipped}
+
+@app.post('/api/signing/copy-page')
+def signing_copy_page(request:Request,payload:dict=Body(...)):
+    """Copy every signature box from the current page to next/custom pages of the same PDF."""
+    u=require_action(request,'attendance.sign')
+    aid=int(payload.get('attendance_id')); source_page=int(payload.get('source_page',1)); targets=sorted({int(x) for x in payload.get('target_pages') or []})
+    a=q('SELECT * FROM attendance WHERE id=?',(aid,),one=True)
+    if not a: raise HTTPException(404,'Document not found')
+    ensure_signable_attendance(a)
+    v=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
+    info=pdf_info(BASE/v['file_path'])
+    if source_page<1 or source_page>info['page_count']: raise HTTPException(400,'Source page does not exist')
+    source_lock=_page_lock_for(aid,source_page)
+    if source_lock: raise HTTPException(409,f"Page {source_page} is locked to master page {source_lock['source_page']}. Unlock it before using it as a source.")
+    src=[dict(r) for r in q('SELECT * FROM attendance_signature_placements WHERE attendance_id=? AND page=? ORDER BY id',(aid,source_page))]
+    if not src: raise HTTPException(400,'Save at least one signature on the current page first')
+    for pl in src:
+        sig=q('SELECT * FROM signatures WHERE id=? AND active=1',(pl['signature_id'],),one=True)
+        if not signature_allowed(sig,u): raise HTTPException(403,'A signature on this page is no longer authorized')
+    sp=info['pages'][source_page-1]; copied=[]; skipped=[]; ts=now()
+    for pn in targets:
+        if pn==source_page or pn<1 or pn>info['page_count']:
+            skipped.append(pn); continue
+        if _page_lock_for(aid,pn):
+            skipped.append(pn); continue
+        dp=info['pages'][pn-1]
+        if abs(dp['width']-sp['width'])>=1 or abs(dp['height']-sp['height'])>=1 or int(dp.get('rotation',0))!=int(sp.get('rotation',0)):
+            skipped.append(pn); continue
+        with connect() as con:
+            con.execute('DELETE FROM attendance_signature_placements WHERE attendance_id=? AND page=?',(aid,pn))
+            for pl in src:
+                con.execute('INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,placement_slot,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                            (aid,pl['signature_id'],pn,int(pl['placement_slot'] or 1),pl['nx'],pl['ny'],pl['nw'],pl['nh'],u['id'],ts))
+            con.commit()
+        copied.append(pn)
+    placements=[dict(r) for r in q('SELECT * FROM attendance_signature_placements WHERE attendance_id=? ORDER BY page,id',(aid,))]
+    return {'ok':True,'copied':copied,'skipped':skipped,'placements':placements}
+
+@app.post('/api/signing/lock-pages')
+def signing_lock_pages(request:Request,payload:dict=Body(...)):
+    """Make one page the master layout and keep chosen target pages synchronized to it."""
+    u=require_action(request,'attendance.sign')
+    aid=int(payload.get('attendance_id')); source_page=int(payload.get('source_page',1))
+    targets=sorted({int(x) for x in payload.get('target_pages') or []})
+    a=q('SELECT * FROM attendance WHERE id=?',(aid,),one=True)
+    if not a: raise HTTPException(404,'Document not found')
+    ensure_signable_attendance(a)
+    if _page_lock_for(aid,source_page):
+        raise HTTPException(409,f'Page {source_page} is already locked to another master page. Unlock it first.')
+    v=q('SELECT file_path FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
+    if not v: raise HTTPException(404,'Document version not found')
+    info=pdf_info(BASE/v['file_path'])
+    if source_page<1 or source_page>info['page_count']: raise HTTPException(400,'Master page does not exist')
+    src=[dict(r) for r in q('SELECT * FROM attendance_signature_placements WHERE attendance_id=? AND page=? ORDER BY id',(aid,source_page))]
+    if not src: raise HTTPException(400,'Add and save at least one signature on the master page first')
+    for pl in src:
+        sig=q('SELECT * FROM signatures WHERE id=? AND active=1',(pl['signature_id'],),one=True)
+        if not signature_allowed(sig,u): raise HTTPException(403,'A signature on the master page is no longer authorized')
+    sp=info['pages'][source_page-1]; locked=[]; skipped=[]; ts=now()
+    with connect() as con:
+        for pn in targets:
+            if pn==source_page or pn<1 or pn>info['page_count']:
+                skipped.append({'page':pn,'reason':'invalid'}); continue
+            # Avoid chains/cycles: a page acting as a master cannot simultaneously become a target.
+            has_children=con.execute('SELECT 1 FROM signature_page_locks WHERE attendance_id=? AND source_page=? LIMIT 1',(aid,pn)).fetchone()
+            if has_children:
+                skipped.append({'page':pn,'reason':'page-is-master'}); continue
+            dp=info['pages'][pn-1]
+            same=abs(dp['width']-sp['width'])<1 and abs(dp['height']-sp['height'])<1 and int(dp.get('rotation',0))==int(sp.get('rotation',0))
+            if not same:
+                skipped.append({'page':pn,'reason':'layout-mismatch'}); continue
+            con.execute('INSERT INTO signature_page_locks(attendance_id,source_page,target_page,created_by,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(attendance_id,target_page) DO UPDATE SET source_page=excluded.source_page,created_by=excluded.created_by,updated_at=excluded.updated_at',
+                        (aid,source_page,pn,u['id'],ts))
+            con.execute('DELETE FROM attendance_signature_placements WHERE attendance_id=? AND page=?',(aid,pn))
+            for pl in src:
+                con.execute('INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,placement_slot,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                            (aid,pl['signature_id'],pn,int(pl['placement_slot'] or 1),pl['nx'],pl['ny'],pl['nw'],pl['nh'],u['id'],ts))
+            locked.append(pn)
+        con.commit()
+    placements=[dict(r) for r in q('SELECT * FROM attendance_signature_placements WHERE attendance_id=? ORDER BY page,id',(aid,))]
+    locks=[dict(r) for r in q('SELECT * FROM signature_page_locks WHERE attendance_id=? ORDER BY source_page,target_page',(aid,))]
+    audit(u['id'],'Lock Signature Pages','Attendance',str(aid),None,f'master={source_page}; targets={locked}')
+    return {'ok':True,'master_page':source_page,'locked':locked,'skipped':skipped,'placements':placements,'locks':locks}
+
+@app.post('/api/signing/unlock-page')
+def signing_unlock_page(request:Request,payload:dict=Body(...)):
+    """Detach one target page from its master while preserving the current copied boxes."""
+    u=require_action(request,'attendance.sign')
+    aid=int(payload.get('attendance_id')); page_no=int(payload.get('page',1))
+    a=q('SELECT * FROM attendance WHERE id=?',(aid,),one=True)
+    if not a: raise HTTPException(404,'Document not found')
+    ensure_signable_attendance(a)
+    lock=_page_lock_for(aid,page_no)
+    if not lock: return {'ok':True,'unlocked':False,'page':page_no,'locks':[dict(r) for r in q('SELECT * FROM signature_page_locks WHERE attendance_id=? ORDER BY source_page,target_page',(aid,))]}
+    execute('DELETE FROM signature_page_locks WHERE attendance_id=? AND target_page=?',(aid,page_no))
+    audit(u['id'],'Unlock Signature Page','Attendance',str(aid),f"master={lock['source_page']}",f'page={page_no}')
+    return {'ok':True,'unlocked':True,'page':page_no,'locks':[dict(r) for r in q('SELECT * FROM signature_page_locks WHERE attendance_id=? ORDER BY source_page,target_page',(aid,))]}
 
 @app.post('/api/signing/apply-template')
 def apply_signature_template(request:Request,payload:dict=Body(...)):
@@ -311,21 +500,24 @@ def apply_signature_template(request:Request,payload:dict=Body(...)):
         try: info=pdf_info(BASE/v['file_path'])
         except Exception: mismatched.append(aid); continue
         fp=pdf_layout_fingerprint(info)
-        candidates=q("SELECT * FROM signature_position_templates WHERE signature_id=? AND page_count=? ORDER BY updated_at DESC",(sid,info['page_count']))
-        t=None
+        candidates=q("SELECT * FROM signature_position_templates WHERE signature_id=? AND page_count=? ORDER BY page,placement_slot,updated_at DESC",(sid,info['page_count']))
+        matches=[]; seen_slots=set()
         for cand in candidates:
-            pn=int(cand['page'])
-            if not (1<=pn<=info['page_count']): continue
+            pn=int(cand['page']); slot=int(cand['placement_slot'] or 1)
+            if (pn,slot) in seen_slots or not (1<=pn<=info['page_count']): continue
             pinfo=info['pages'][pn-1]
             same_size=abs(pinfo['width']-cand['page_width'])<1 and abs(pinfo['height']-cand['page_height'])<1
             same_rotation=int(pinfo.get('rotation',0))==int(cand['page_rotation'] or 0)
             same_fp=not cand['layout_fingerprint'] or cand['layout_fingerprint']==fp
             if same_size and same_rotation and same_fp:
-                t=cand; break
-        if not t: mismatched.append(aid); continue
-        execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,created_by=excluded.created_by,updated_at=excluded.updated_at",
-                (aid,sid,t['page'],t['nx'],t['ny'],t['nw'],t['nh'],u['id'],now()))
-        applied.append(aid); applied_placements.append({'attendance_id':aid,'signature_id':sid,'page':t['page'],'nx':t['nx'],'ny':t['ny'],'nw':t['nw'],'nh':t['nh']})
+                matches.append(cand); seen_slots.add((pn,slot))
+        if not matches: mismatched.append(aid); continue
+        for t in matches:
+            slot=int(t['placement_slot'] or 1)
+            execute("INSERT INTO attendance_signature_placements(attendance_id,signature_id,page,placement_slot,nx,ny,nw,nh,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(attendance_id,signature_id,page,placement_slot) DO UPDATE SET nx=excluded.nx,ny=excluded.ny,nw=excluded.nw,nh=excluded.nh,created_by=excluded.created_by,updated_at=excluded.updated_at",
+                    (aid,sid,t['page'],slot,t['nx'],t['ny'],t['nw'],t['nh'],u['id'],now()))
+            applied_placements.append({'attendance_id':aid,'signature_id':sid,'page':t['page'],'placement_slot':slot,'nx':t['nx'],'ny':t['ny'],'nw':t['nw'],'nh':t['nh']})
+        applied.append(aid)
     return {'ok':True,'applied':applied,'mismatched':mismatched,'placements':applied_placements}
 
 @app.post('/api/signing/sign')
@@ -366,6 +558,7 @@ def signing_sign(request:Request,payload:dict=Body(...)):
                     for pl in pls:
                         con.execute("INSERT INTO attendance_sign_events(attendance_id,version,signature_id,page,nx,ny,nw,nh,signed_by,signed_at,checksum) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(aid,ver,pl['signature_id'],pl['page'],pl['nx'],pl['ny'],pl['nw'],pl['nh'],u['id'],ts,verify['checksum']))
                     con.execute('DELETE FROM attendance_signature_placements WHERE attendance_id=?',(aid,))
+                    con.execute('DELETE FROM signature_page_locks WHERE attendance_id=?',(aid,))
                     con.execute('INSERT INTO audit_logs(user_id,action,module,record_ref,old_value,new_value,created_at) VALUES(?,?,?,?,?,?,?)',(u['id'],'Sign PDF','Attendance',str(aid),fresh['status'],verify['checksum'],ts))
                     con.commit()
                 except Exception:
@@ -420,7 +613,7 @@ def attendance_revision(request:Request, aid:int, notes:str=Form(''), pdf:Upload
     if Path(pdf.filename or '').suffix.lower()!='.pdf': raise HTTPException(400,'Revision must be PDF')
     rel,orig=save_upload(pdf,'attendance',{'.pdf'}); ver=a['current_version']+1; ts=now()
     execute("INSERT INTO attendance_versions(attendance_id,version,file_path,original_name,notes,status,uploaded_by,uploaded_at) VALUES(?,?,?,?,?,?,?,?)",(aid,ver,rel,orig,notes,'Checking',u['id'],ts))
-    execute("UPDATE attendance SET current_version=?,status='Checking',signed_file_path=NULL,final_checksum=NULL,signed_by=NULL,signed_at=NULL,updated_at=? WHERE id=?",(ver,ts,aid)); execute("DELETE FROM attendance_signature_placements WHERE attendance_id=?",(aid,)); audit(u['id'],'Upload Revision','Attendance',str(aid),str(a['current_version']),str(ver)); return RedirectResponse(f"/attendance/{aid}",303)
+    execute("UPDATE attendance SET current_version=?,status='Checking',signed_file_path=NULL,final_checksum=NULL,signed_by=NULL,signed_at=NULL,updated_at=? WHERE id=?",(ver,ts,aid)); execute("DELETE FROM attendance_signature_placements WHERE attendance_id=?",(aid,)); execute("DELETE FROM signature_page_locks WHERE attendance_id=?",(aid,)); audit(u['id'],'Upload Revision','Attendance',str(aid),str(a['current_version']),str(ver)); return RedirectResponse(f"/attendance/{aid}",303)
 
 @app.post("/attendance/{aid}/status")
 def attendance_status(request:Request, aid:int, status:str=Form(...), note:str=Form('')):

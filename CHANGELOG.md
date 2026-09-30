@@ -1,31 +1,42 @@
 # Changelog
 
-## 3.2.0 — Apple Design System + Signing Hardening
+## 3.4.0 — Master Signature Lock + Flexible Add/Remove
 
-### Apple-style UI overhaul
-- Rebuilt the global visual system around Apple-like system typography (`-apple-system`, `BlinkMacSystemFont`, SF Pro fallbacks), neutral surfaces, restrained blue accent, subtle borders and blur.
-- Reworked light and dark mode tokens across the complete application.
-- Simplified login into a focused, centered, high-contrast secure workspace with a more prominent BDX logo.
-- Reworked sidebar, topbar, navigation states, account menu, notification popover, cards, tables, forms, buttons, badges, tabs, modal, command palette, empty states and responsive behavior.
-- Fixed mobile sidebar JS/CSS class mismatch.
-- Fixed Operational Health ring CSS variable mismatch.
-- Fixed 5-stage attendance pipeline layout.
-- Removed misleading static Application/Database health pills from Dashboard; status rail now uses actual operational data.
-- Added consistent visual treatment for review/detail pages, PDF viewer, inventory statistics, user/profile pages and permissions.
+### Signature workspace
+- Added **Master Page → Locked Pages** workflow.
+- User positions/adds/removes signature boxes on one master page, then enters target pages such as `2-5` or `2,4,6-8`.
+- **Save & Lock** copies the complete master layout to all compatible target pages and keeps those pages synchronized.
+- Any later add/remove/move/resize on the master page is propagated on the next Save / page change.
+- Locked target pages are read-only and clearly show `Locked to master page X`.
+- Added **Unlock page** to detach one target page while preserving its current signature boxes, after which it can be edited independently.
+- One-time Copy remains available as a secondary/advanced action.
+- Existing floating controls remain on editable pages: drag, resize, duplicate/add, delete/remove.
+- Locked pages cannot accidentally overwrite synchronized placement.
+- Pages with different size/rotation are skipped safely.
+- Prevents lock chains/cycles by refusing to turn an existing master page into a locked target.
 
-### Signing workflow hardening
-- Signed/Final/Archived attendance records can no longer be signed again directly.
-- A fresh PDF revision can be uploaded after a Signed version for intentional re-signing; old signing pointers are cleared while previous versions remain in history.
-- Bulk signing now requires both `attendance.sign_bulk` and `attendance.sign`.
-- Signature authorization is revalidated during placement, saved-template application, final preview and final sign.
-- Signature template matching now checks page dimensions, rotation and a whole-document layout fingerprint.
-- Final signing database changes are atomic per document using a single SQLite transaction.
-- Generated output is deleted if the database transaction fails.
-- Signed PDF validation now checks that every expected signature region is visibly changed, in addition to file integrity, page count and SHA-256 checksum.
-- Signature management permissions are tightened; non-managers may only manage their own signature when allowed to sign.
-- Final Sign button is UI-gated until an exact Final Preview has successfully rendered.
+### Data integrity
+- Added `signature_page_locks` table with FK cascade and unique target-page constraint.
+- Signing clears temporary page-lock records after successful output generation.
+- Uploading a fresh revision clears stale page locks.
+- Master-page save updates all locked target placements in the same DB transaction.
 
-### Interaction cleanup
-- Kept one primary action for each workflow step.
-- Preserved functional notification, search, theme, account menu, upload, template, preview, sign, delete and workflow actions.
-- No dummy UI controls were added.
+### UI
+- Added Apple-style lock/master status card.
+- Added visual lock state to signature boxes.
+- More compact responsive signing layout for 1366/1440 widths.
+- Existing Add/Remove controls are preserved for flexible editing on the master page.
+
+### Validation
+- Python compile: PASS
+- JavaScript syntax: PASS
+- Jinja compile: PASS
+- Master page lock 1 → 2-5: PASS
+- Master move/resize synchronization: PASS
+- Add second signature box and sync: PASS
+- Remove signature box and sync: PASS
+- Locked-target edit protection: PASS
+- Unlock one target and independent edit: PASS
+- Re-sync remaining locked targets: PASS
+- Final signed PDF contains placements on all locked pages: PASS
+- Lock records cleared after signing: PASS
