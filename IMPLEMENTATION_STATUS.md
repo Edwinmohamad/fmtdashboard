@@ -26,3 +26,9 @@ Implemented and tested:
 - Size/rotation mismatch is skipped rather than forced.
 - Add/remove remains supported on master and independent pages.
 - Original PDF remains preserved by the signed-version workflow.
+
+## v3.5.1 signed-output controls
+- Post-sign success modal keeps the result visible instead of immediately reloading.
+- Direct signed-PDF download and document-open controls are available after signing.
+- Download endpoint is protected by `attendance.download` permission and only serves Signed/Final verified outputs.
+- Current-page `Save now` control remains available before final signing; final signing itself persists a new verified PDF version automatically.

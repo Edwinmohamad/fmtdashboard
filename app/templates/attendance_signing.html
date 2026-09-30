@@ -103,6 +103,19 @@
   </aside>
 </div>
 
+
+<div class="modal" id="signCompleteModal" hidden>
+  <div class="modal-card sign-complete-modal-card">
+    <div class="sign-complete-head">
+      <div class="success-orb" aria-hidden="true">✓</div>
+      <div><span class="eyebrow">SIGNING COMPLETE</span><h2>Signed PDF saved</h2><p>Your signed output has been saved as a new verified version. Download it now or open the document record.</p></div>
+    </div>
+    <div class="sign-complete-summary" id="signCompleteSummary"></div>
+    <div class="sign-complete-files" id="signCompleteFiles"></div>
+    <div class="sign-complete-actions"><button class="btn" id="continueSigning" type="button">Continue</button><a class="btn primary" id="primaryDownloadSigned" href="#" download>Download Signed PDF</a></div>
+  </div>
+</div>
+
 <div class="modal" id="previewModal" hidden><div class="modal-card preview-modal-card"><div class="panel-head"><div><span class="eyebrow">FINAL PREVIEW</span><h2>Exact signed output</h2><p>This preview uses the same PDF engine as final signing.</p></div><button class="btn small" id="closePreview" type="button">Close</button></div><div class="exact-preview-shell"><img id="exactPreviewImg" class="exact-preview" alt="Signed preview"></div></div></div>
 <script>window.FMT_SIGNING={placements:{{placements|tojson}},locks:{{locks|default({})|tojson}}};</script>
 {% endblock %}

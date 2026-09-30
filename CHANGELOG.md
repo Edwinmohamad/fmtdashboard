@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.5.1 — Signed output controls
+- Added a clear post-sign success panel instead of immediately reloading the workspace.
+- Added direct **Download Signed PDF** and **Open** controls after a successful sign.
+- Added a permission-protected `/attendance/{id}/download` endpoint for the verified signed output.
+- Signing result API now returns the saved document name, download URL, and detail URL.
+- Signed output remains persisted as a verified attendance version with checksum/audit history.
+- Bumped static asset cache key to 3.5.1.
+
 ## 3.5.0 — Flexible Page Apply Workspace
 - Replaced hard page locking with editable copied placements.
 - Added visual page-number target selector; no manual page-range typing required.

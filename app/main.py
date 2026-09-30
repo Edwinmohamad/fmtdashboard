@@ -559,13 +559,29 @@ def signing_sign(request:Request,payload:dict=Body(...)):
                     con.commit()
                 except Exception:
                     con.rollback(); raise
-            results.append({'id':aid,'ok':True,'checksum':verify['checksum']})
+            results.append({'id':aid,'ok':True,'checksum':verify['checksum'],'name':v['original_name'],'download_url':f'/attendance/{aid}/download','detail_url':f'/attendance/{aid}'})
         except Exception as exc:
             if out: out.unlink(missing_ok=True)
             detail=exc.detail if isinstance(exc,HTTPException) else str(exc)
             results.append({'id':aid,'ok':False,'error':detail})
     ok=sum(1 for r in results if r['ok'])
     return {'ok':ok==len(results),'signed':ok,'failed':len(results)-ok,'results':results}
+
+@app.get('/attendance/{aid}/download')
+def attendance_download(request:Request,aid:int):
+    u=require_action(request,'attendance.download')
+    a=q('SELECT * FROM attendance WHERE id=?',(aid,),one=True)
+    if not a: raise HTTPException(404,'Attendance document not found')
+    if not a['signed_file_path'] or a['status'] not in ('Signed','Final'):
+        raise HTTPException(409,'Signed PDF is not available yet')
+    p=(BASE/a['signed_file_path']).resolve()
+    uploads=(BASE/'uploads').resolve()
+    if uploads not in p.parents or not p.is_file():
+        raise HTTPException(404,'Signed PDF file not found')
+    latest=q('SELECT original_name FROM attendance_versions WHERE attendance_id=? ORDER BY version DESC LIMIT 1',(aid,),one=True)
+    raw=(latest['original_name'] if latest else f'attendance-{aid}.pdf') or f'attendance-{aid}.pdf'
+    filename=raw if raw.upper().startswith('SIGNED-') else f'SIGNED-{raw}'
+    return FileResponse(p,media_type='application/pdf',filename=filename)
 
 @app.post('/attendance/{aid}/finalize')
 def attendance_finalize(request:Request,aid:int):
