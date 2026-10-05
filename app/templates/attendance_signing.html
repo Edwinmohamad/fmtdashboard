@@ -118,4 +118,61 @@
 
 <div class="modal" id="previewModal" hidden><div class="modal-card preview-modal-card"><div class="panel-head"><div><span class="eyebrow">FINAL PREVIEW</span><h2>Exact signed output</h2><p>This preview uses the same PDF engine as final signing.</p></div><button class="btn small" id="closePreview" type="button">Close</button></div><div class="exact-preview-shell"><img id="exactPreviewImg" class="exact-preview" alt="Signed preview"></div></div></div>
 <script>window.FMT_SIGNING={placements:{{placements|tojson}},locks:{{locks|default({})|tojson}}};</script>
+
+<style>
+/* v3.5.2 — keep Signature Control beside the PDF on desktop */
+.sign-workspace.v35{
+  width:100%;
+  min-width:0;
+  grid-template-columns:minmax(210px,248px) minmax(0,1fr) minmax(300px,326px) !important;
+  grid-template-areas:"queue stage controls";
+  align-items:start;
+}
+.sign-workspace.v35 .doc-queue{grid-area:queue;min-width:0}
+.sign-workspace.v35 .sign-stage{grid-area:stage;min-width:0}
+.sign-workspace.v35 .sign-controls{
+  grid-area:controls;
+  min-width:0;
+  align-self:start;
+  position:sticky !important;
+  top:76px;
+  max-height:calc(100vh - 92px) !important;
+  overflow:auto;
+}
+@media(max-width:1450px){
+  .sign-workspace.v35{
+    grid-template-columns:minmax(190px,220px) minmax(0,1fr) 294px !important;
+  }
+}
+@media(max-width:1180px) and (min-width:821px){
+  .sign-workspace.v35{
+    grid-template-columns:minmax(0,1fr) 294px !important;
+    grid-template-areas:
+      "queue queue"
+      "stage controls";
+  }
+  .sign-workspace.v35 .doc-queue{position:static;max-height:none}
+  .sign-workspace.v35 .queue-list{max-height:220px}
+  .sign-workspace.v35 .sign-controls{
+    position:sticky !important;
+    top:76px;
+    max-height:calc(100vh - 92px) !important;
+  }
+}
+@media(max-width:820px){
+  .sign-workspace.v35{
+    grid-template-columns:1fr !important;
+    grid-template-areas:
+      "queue"
+      "stage"
+      "controls";
+  }
+  .sign-workspace.v35 .doc-queue,
+  .sign-workspace.v35 .sign-controls{
+    position:static !important;
+    max-height:none !important;
+  }
+}
+</style>
+
 {% endblock %}
